@@ -36,11 +36,11 @@ same Express app that serves the API, so the client and API share one origin.
 | Script | What it does |
 | --- | --- |
 | `npm run dev` | Express + Vite dev server (HMR) |
-| `npm run build` | `vite build` then bundles `server.ts` → `dist/server.cjs` |
-| `npm start` | Serves the built client and API from `dist/` |
+| `npm run build` | `vite build` then bundles `server.ts` → `server-build/server.cjs` |
+| `npm start` | Serves the built client (`dist/`) and the API |
 | `npm test` | Builds the server bundle and runs the conversion test suite |
 | `npm run lint` | `tsc --noEmit` |
-| `npm run clean` | Removes `dist/` (cross-platform, no `rm -rf`) |
+| `npm run clean` | Removes `dist/` and `server-build/` (cross-platform, no `rm -rf`) |
 
 All scripts are OS-agnostic — `clean` uses Node's `fs.rmSync`, and `start` uses
 `cross-env` to set `NODE_ENV`, so Windows, macOS and Linux behave identically.
@@ -109,15 +109,22 @@ Uploads are capped at 25 MB; oversized files get a 413 with a readable message.
 vercel --prod --yes
 ```
 
-`vercel.json` runs `npm run build`, publishes `dist/`, and rewrites `/api/(.*)` to
-the serverless function. `api/index.mjs` installs inert `DOMMatrix`, `ImageData`
-and `Path2D` shims — pdf-lib and pdf-parse probe for them at import time — and then
-imports the bundled Express app.
+`vercel.json` runs `npm run build`, publishes `dist/`, rewrites `/api/(.*)` to the
+serverless function, and rewrites every other path to `/index.html` so client-side
+routes such as `/reader` survive a hard navigation. (Vercel applies rewrites after
+the filesystem check, so real assets still win.) `api/index.mjs` installs inert
+`DOMMatrix`, `ImageData` and `Path2D` shims — pdf-lib and pdf-parse probe for them
+at import time — then imports the bundled Express app.
+
+The server bundle is emitted to `server-build/`, deliberately **outside** the
+published `dist/` directory: anything inside `dist/` is served as a static asset,
+so building there would make `server.cjs` and its sourcemap publicly downloadable.
 
 ## Project layout
 
 ```
 api/index.mjs              Vercel serverless entry (DOM shims + bundled app)
+server-build/server.cjs    Built server bundle (git-ignored, never published)
 server.ts                  Express app: every API route + all conversion logic
 src/App.tsx                History-API router: converter | reader
 src/components/            Sidebar, ConverterPanel, ReaderEditorPanel, BookReader

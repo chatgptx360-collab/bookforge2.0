@@ -9,3 +9,6 @@ npm-debug.log*
 server.js
 server.cjs
 coverage
+
+# Server bundle (built, not published as a static asset)
+server-build

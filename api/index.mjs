@@ -36,7 +36,9 @@ globalThis.DOMMatrix ??= NoopDOMMatrix;
 globalThis.ImageData ??= NoopImageData;
 globalThis.Path2D ??= NoopPath2D;
 
-const { app } = await import('../dist/server.cjs');
+// The bundle lives outside `dist/` so Vercel never publishes it (and its
+// sourcemap) as downloadable static assets.
+const { app } = await import('../server-build/server.cjs');
 
 export default app;
 

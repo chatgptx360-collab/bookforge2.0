@@ -15,7 +15,7 @@ const {
   parseDocumentStructure,
   parseRtfToText,
   robustJsonParse,
-} = require('../dist/server.cjs');
+} = require('../server-build/server.cjs');
 
 const MANUSCRIPT = [
   'The Cartographer of Small Hours',
