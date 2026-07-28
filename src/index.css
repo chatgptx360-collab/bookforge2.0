@@ -1,0 +1,85 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+  --font-serif: "Lora", Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-forge-bg: #0A0A0B;
+  --color-forge-panel: #111114;
+  --color-forge-border: #27272A;
+  --color-forge-text: #E4E4E7;
+  --color-forge-gold: #D4AF37;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #0A0A0B;
+  color: #E4E4E7;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #27272A #111114;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #111114; }
+::-webkit-scrollbar-thumb { background: #27272A; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #D4AF37; }
+
+.custom-select {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, #D4AF37 50%),
+    linear-gradient(135deg, #D4AF37 50%, transparent 50%);
+  background-position: calc(100% - 14px) calc(1em + 1px), calc(100% - 9px) calc(1em + 1px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.prose h1, .prose h2, .prose h3 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  color: #FFFFFF;
+}
+.prose p {
+  font-family: var(--font-serif);
+  line-height: 1.8;
+  font-size: 1.1rem;
+  color: #D1D1D6;
+  margin-bottom: 1.5rem;
+  text-align: justify;
+}
+.prose h2 {
+  font-size: 1.5rem;
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid #27272A;
+  padding-bottom: 0.5rem;
+  color: #D4AF37;
+}
+.prose blockquote {
+  border-left: 4px solid #D4AF37;
+  padding-left: 1rem;
+  font-style: italic;
+  color: #A1A1AA;
+  margin: 1.5rem 0;
+  background: #18181B;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+  border-radius: 0 4px 4px 0;
+}
+
+@media print {
+  .no-print { display: none !important; }
+}
