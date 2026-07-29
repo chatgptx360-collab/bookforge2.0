@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Lint, test and build (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Assert the server bundle is not published as a static asset
+        run: |
+          if [ -e dist/server.cjs ] || [ -e dist/server.cjs.map ]; then
+            echo "::error::The server bundle leaked into the published dist/ directory"
+            exit 1
+          fi
+
+  epubcheck:
+    name: Validate EPUB output
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - run: npm ci
+      - run: npm run build:server
+
+      - name: Generate an EPUB from a sample manuscript
+        run: |
+          node -e "
+            const fs = require('fs');
+            const { convertTextToEpub } = require('./server-build/server.cjs');
+            const text = [
+              'The Cartographer of Small Hours', 'by Imogen Vale', '',
+              'Copyright © 2026 by Imogen Vale', '',
+              'Chapter 1: The Lighthouse', '',
+              'The lamp had not turned in eleven years.', '', '***', '',
+              'By dawn the fog had swallowed the jetty.', '',
+              'Chapter 2: Tidewrack', '', 'Salt crusted the hinges.',
+            ].join('\n');
+            fs.writeFileSync('ci-sample.epub', convertTextToEpub(text, 'The Cartographer of Small Hours', 'Imogen Vale'));
+          "
+        env:
+          BOOKFORGE_NO_LISTEN: '1'
+
+      - name: Download EPUBCheck
+        run: |
+          curl -sSL -o epubcheck.zip https://github.com/w3c/epubcheck/releases/download/v5.2.1/epubcheck-5.2.1.zip
+          unzip -q epubcheck.zip
+
+      - name: Run EPUBCheck
+        run: java -jar epubcheck-5.2.1/epubcheck.jar ci-sample.epub
