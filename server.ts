@@ -2560,21 +2560,58 @@ interface SpeechPart {
  */
 class SpeechQuotaError extends Error {
   readonly retryAfterSeconds: number;
-  constructor(retryAfterSeconds: number, detail: string) {
-    super(detail);
+  /** Per-minute quotas are worth waiting out; a daily one is spent. */
+  readonly scope: 'minute' | 'day';
+  readonly limit: number | null;
+  constructor(quota: QuotaDetails) {
+    super(quota.message);
     this.name = 'SpeechQuotaError';
-    this.retryAfterSeconds = retryAfterSeconds;
+    this.retryAfterSeconds = quota.retryAfterSeconds;
+    this.scope = quota.scope;
+    this.limit = quota.limit;
   }
 }
 
-/** Reads the provider's suggested wait out of a 429, in seconds. */
-function retryDelayFrom(message: string): number {
-  const match =
-    message.match(/"retryDelay"\s*:\s*"?(\d+(?:\.\d+)?)s/i) ?? message.match(/retry in\s+([0-9.]+)\s*s/i);
-  const seconds = match ? Number.parseFloat(match[1]) : NaN;
-  // Free-tier windows are per minute, so a missing hint means "wait one out".
-  if (!Number.isFinite(seconds) || seconds <= 0) return 60;
-  return Math.min(Math.ceil(seconds) + 2, 300);
+interface QuotaDetails {
+  message: string;
+  retryAfterSeconds: number;
+  scope: 'minute' | 'day';
+  limit: number | null;
+}
+
+/**
+ * Turns a provider 429 into something a person can act on.
+ *
+ * These errors arrive as a wall of nested JSON, and the one field that decides
+ * what to do — whether the exhausted quota is per minute or per day — is buried
+ * in `quotaId`. A per-minute window is worth waiting out; a daily one is spent
+ * until it resets, and the `retryDelay` the API still suggests is misleading.
+ */
+export function describeQuota(raw: string): QuotaDetails {
+  const field = (name: string) => raw.match(new RegExp(`"${name}"\\s*:\\s*"([^"]+)"`, 'i'))?.[1];
+
+  const quotaId = field('quotaId') ?? '';
+  const scope: 'minute' | 'day' = /per\s*day/i.test(quotaId) || /per\s*day/i.test(raw) ? 'day' : 'minute';
+  const limitText = field('quotaValue') ?? raw.match(/limit:\s*(\d+)/i)?.[1];
+  const limit = limitText && Number.isFinite(Number(limitText)) ? Number(limitText) : null;
+  const model = field('model') ?? TTS_MODEL;
+  const freeTier = /free[_\s-]?tier/i.test(quotaId) || /free[_\s-]?tier/i.test(raw);
+
+  const delay = raw.match(/"retryDelay"\s*:\s*"?(\d+(?:\.\d+)?)s/i) ?? raw.match(/retry in\s+([0-9.]+)\s*s/i);
+  const hinted = delay ? Number.parseFloat(delay[1]) : NaN;
+  const retryAfterSeconds =
+    scope === 'day' ? 0 : Math.min(Math.ceil(Number.isFinite(hinted) && hinted > 0 ? hinted : 60) + 2, 300);
+
+  const plan = freeTier ? 'free tier' : 'plan';
+  const allowance = limit === null ? 'The speech quota' : `The ${plan} allows ${limit} speech requests per ${scope}`;
+
+  const message =
+    scope === 'day'
+      ? `${allowance} for ${model}, and that is spent for today. Google's daily quotas reset at midnight Pacific time. ` +
+        'Enabling billing on the API key raises the limit immediately — everything narrated so far is kept either way.'
+      : `${allowance} for ${model}, and that window is full. Waiting ${retryAfterSeconds}s, then continuing.`;
+
+  return { message, retryAfterSeconds, scope, limit };
 }
 
 /** Synthesises one passage and returns raw PCM plus the format the model used. */
@@ -2621,7 +2658,8 @@ async function synthesize(
         (typeof error === 'object' ? JSON.stringify(error) : String(error));
 
       if (/429|RESOURCE_EXHAUSTED|quota/i.test(message)) {
-        throw new SpeechQuotaError(retryDelayFrom(message), message);
+        console.warn(`[TTS] quota: ${message.slice(0, 300)}`);
+        throw new SpeechQuotaError(describeQuota(message));
       }
       // A transient 5xx is worth one immediate second attempt.
       if (attempt < attempts - 1 && /50[023]|Service Unavailable|Overloaded|ECONNRESET|fetch failed/i.test(message)) {
@@ -2683,10 +2721,13 @@ app.post('/api/tts/speak', async (req, res) => {
     res.json({ ...result, characters: String(text).length, voice });
   } catch (error) {
     if (error instanceof SpeechQuotaError) {
-      res.setHeader('Retry-After', String(error.retryAfterSeconds));
+      if (error.retryAfterSeconds > 0) res.setHeader('Retry-After', String(error.retryAfterSeconds));
       res.status(429).json({
-        error: `The speech model's quota is exhausted. Waiting ${error.retryAfterSeconds}s before trying this passage again.`,
+        error: error.message,
         retryAfterSeconds: error.retryAfterSeconds,
+        // 'day' means waiting is pointless — the client stops instead.
+        quotaScope: error.scope,
+        quotaLimit: error.limit,
         quotaExhausted: true,
       });
       return;

@@ -1,7 +1,8 @@
-import { useMemo, useRef, useState } from 'react';
-import { AlertCircle, AudioLines, Download, Loader2, Sparkles, Square } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertCircle, AudioLines, Check, Download, Loader2, Sparkles, Square } from 'lucide-react';
 import VoicePicker, { useVoiceCatalogue } from './tts/VoicePicker';
 import { planChunks, speak } from '../utils/speech';
+import { loadSession, savedAgo, saveSession } from '../utils/sessionStore';
 import {
   base64ToPcm,
   concatPcm,
@@ -33,8 +34,48 @@ export default function TtsStudioPanel() {
   const [error, setError] = useState<string | null>(null);
   const [audio, setAudio] = useState<{ pcm: Int16Array; sampleRate: number; url: string } | null>(null);
   const [encoding, setEncoding] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [restoring, setRestoring] = useState(true);
   const audioRef = useRef<HTMLAudioElement>(null);
   const cancelRef = useRef(false);
+
+  // The passage and the audio made from it both come back after a refresh.
+  useEffect(() => {
+    let cancelled = false;
+    void loadSession('speech').then((saved) => {
+      if (cancelled || !saved) {
+        setRestoring(false);
+        return;
+      }
+      setText(saved.text);
+      setVoice(saved.voice);
+      setStyle(saved.style);
+      if (saved.audio) {
+        const pcm = new Int16Array(saved.audio.pcm);
+        setAudio({ pcm, sampleRate: saved.audio.sampleRate, url: URL.createObjectURL(encodeWav(pcm, saved.audio.sampleRate)) });
+      }
+      setSavedAt(saved.savedAt);
+      setRestoring(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (restoring || (!text.trim() && !audio)) return;
+    const timer = setTimeout(() => {
+      const stamp = Date.now();
+      void saveSession('speech', {
+        text,
+        voice,
+        style,
+        audio: audio ? { pcm: audio.pcm, sampleRate: audio.sampleRate } : undefined,
+        savedAt: stamp,
+      }).then(() => setSavedAt(stamp));
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [restoring, text, voice, style, audio]);
 
   const characters = text.length;
   const estimatedSeconds = Math.round(characters / 14);
@@ -156,7 +197,14 @@ export default function TtsStudioPanel() {
           </label>
           <div className="flex items-center justify-between text-[10px] font-mono text-[#71717A]">
             <span>{characters.toLocaleString()} characters</span>
-            <span>≈ {formatDuration(estimatedSeconds)} of audio</span>
+            <span className="flex items-center gap-3">
+              {savedAt && (
+                <span className="text-emerald-400/70 flex items-center gap-1">
+                  <Check className="w-3 h-3" /> Saved {savedAgo(savedAt)}
+                </span>
+              )}
+              ≈ {formatDuration(estimatedSeconds)} of audio
+            </span>
           </div>
 
           <label className="block">

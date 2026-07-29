@@ -115,7 +115,11 @@ export async function speak(text: string, options: SpeakOptions): Promise<Speech
     const message = String(payload.error ?? `Speech generation failed (${response.status}).`);
 
     if (response.status === 429) {
-      if (quotaWaits >= maxRetries) throw new SpeechError(message, 429);
+      // A daily allowance does not refill in a minute, so waiting out the
+      // provider's suggested delay would burn time and still fail.
+      if (payload.quotaScope === 'day' || quotaWaits >= maxRetries) {
+        throw new SpeechError(message, 429);
+      }
       quotaWaits++;
       const wait = Math.ceil(
         Number(payload.retryAfterSeconds) || Number(response.headers.get('Retry-After')) || 60,

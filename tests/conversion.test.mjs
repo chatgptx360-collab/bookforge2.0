@@ -417,6 +417,45 @@ test('the voice catalogue is well formed', () => {
   }
 });
 
+test('a daily quota is told apart from a per-minute one', () => {
+  const { describeQuota } = require('../server-build/server.cjs');
+
+  // The exact shape the API returns when the free tier's daily cap is spent.
+  const daily = describeQuota(
+    'You exceeded your current quota, please check your plan and billing details. ' +
+      'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, ' +
+      'limit: 10, model: gemini-2.5-flash-tts. Please retry in 32.842259908s. ' +
+      '{"status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.QuotaFailure",' +
+      '"violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests",' +
+      '"quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaValue":"10"}]},' +
+      '{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"32s"}]}',
+  );
+
+  assert.equal(daily.scope, 'day');
+  assert.equal(daily.limit, 10);
+  // Waiting 32s for an allowance that refills tomorrow would waste the user's
+  // time and still fail, so no retry is offered.
+  assert.equal(daily.retryAfterSeconds, 0);
+  assert.match(daily.message, /per day/);
+  assert.match(daily.message, /resets? at midnight Pacific/i);
+  assert.ok(!/\{|"quotaId"/.test(daily.message), 'the raw JSON is not shown to the user');
+
+  const perMinute = describeQuota(
+    'Quota exceeded for metric: generate_content_free_tier_requests, limit: 3. ' +
+      '{"violations":[{"quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaValue":"3"}],' +
+      '"retryDelay":"21s"}',
+  );
+  assert.equal(perMinute.scope, 'minute');
+  assert.equal(perMinute.limit, 3);
+  assert.ok(perMinute.retryAfterSeconds >= 21 && perMinute.retryAfterSeconds <= 30, perMinute.retryAfterSeconds);
+  assert.match(perMinute.message, /per minute/);
+
+  // A bare 429 with nothing parseable must still produce a usable wait.
+  const bare = describeQuota('429 RESOURCE_EXHAUSTED');
+  assert.equal(bare.scope, 'minute');
+  assert.ok(bare.retryAfterSeconds > 0);
+});
+
 test('EPUB output is declared 3.0 and free of EPUB 2 constructs', () => {
   const { convertTextToEpub, validateEpubStructure } = require('../server-build/server.cjs');
   const AdmZip = require('adm-zip');

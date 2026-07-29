@@ -24,6 +24,7 @@ import {
   silence,
 } from '../utils/audio';
 import { planChunks, readJson, speak, SpeechError } from '../utils/speech';
+import { clearSession, loadSession, savedAgo, saveSession } from '../utils/sessionStore';
 import type { ParsedDocument, ParsedSection } from '../types';
 
 const ACCEPTED = ['.docx', '.pdf', '.epub', '.txt', '.rtf'];
@@ -47,6 +48,8 @@ export default function AudiobookPanel() {
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [restoring, setRestoring] = useState(true);
   const runningRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Mirrors `audio` so unmount can revoke every object URL without the cleanup
@@ -67,7 +70,68 @@ export default function AudiobookPanel() {
     [],
   );
 
+  // Pick the last run back up. A refresh in the middle of a book should cost
+  // nothing — neither the audio already made nor the quota it took to make it.
+  useEffect(() => {
+    let cancelled = false;
+    void loadSession('audiobook').then((saved) => {
+      if (cancelled || !saved) {
+        setRestoring(false);
+        return;
+      }
+      setDoc(saved.doc as ParsedDocument);
+      setFileName(saved.fileName);
+      setVoice(saved.voice);
+      setStyle(saved.style);
+      setAnnounceChapters(saved.announceChapters);
+      setAudio(
+        Object.fromEntries(
+          Object.entries(saved.chapters).map(([index, chapter]) => [
+            Number(index),
+            {
+              status: 'done' as const,
+              blob: chapter.blob,
+              url: URL.createObjectURL(chapter.blob),
+              seconds: chapter.seconds,
+            },
+          ]),
+        ),
+      );
+      setSavedAt(saved.savedAt);
+      setRestoring(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const chapters = doc?.sections ?? [];
+
+  // Checkpoint whenever anything worth keeping changes. Debounced so a burst of
+  // finished chapters writes once, and skipped while restoring so the restore
+  // does not immediately save what it just read.
+  useEffect(() => {
+    if (restoring || !doc) return;
+    const timer = setTimeout(() => {
+      const chapterSaves: Record<number, { blob: Blob; seconds: number }> = {};
+      for (const [index, entry] of Object.entries(audioRef.current)) {
+        if (entry.status === 'done' && entry.blob) {
+          chapterSaves[Number(index)] = { blob: entry.blob, seconds: entry.seconds ?? 0 };
+        }
+      }
+      const stamp = Date.now();
+      void saveSession('audiobook', {
+        fileName,
+        doc,
+        voice,
+        style,
+        announceChapters,
+        chapters: chapterSaves,
+        savedAt: stamp,
+      }).then(() => setSavedAt(stamp));
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [restoring, doc, fileName, voice, style, announceChapters, audio]);
 
   const handleFile = async (file: File) => {
     const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
@@ -149,14 +213,11 @@ export default function AudiobookPanel() {
           if (message === 'Stopped.') break;
           setAudio((prev) => ({ ...prev, [index]: { status: 'error', error: message } }));
 
-          // A quota that survived every wait is exhausted for the day, not
-          // busy. Grinding through the remaining chapters would only fail them
-          // all; stop and keep what was finished.
+          // An exhausted quota will fail every remaining chapter too, so stop
+          // rather than grinding through them. The server's message already
+          // explains the allowance and when it resets.
           if (err instanceof SpeechError && err.status === 429) {
-            setError(
-              `${message} The daily quota looks spent, so the run stopped here — everything narrated so far is kept. ` +
-                'Continue narrating when the quota resets, or raise the limit on your API key.',
-            );
+            setError(`${message} The run stopped here; press Continue narrating to pick it up.`);
             break;
           }
           setError(`${message} — the run continues; retry the failed chapters afterwards.`);
@@ -271,7 +332,12 @@ export default function AudiobookPanel() {
         </div>
       )}
 
-      {!doc ? (
+      {restoring ? (
+        // Avoids flashing the drop zone before a saved run is read back.
+        <div className="border-2 border-dashed border-[#27272A] rounded-2xl p-14 text-center">
+          <Loader2 className="w-5 h-5 text-[#52525B] mx-auto animate-spin" />
+        </div>
+      ) : !doc ? (
         <div
           onClick={() => fileInputRef.current?.click()}
           onDragOver={(e) => e.preventDefault()}
@@ -307,13 +373,29 @@ export default function AudiobookPanel() {
                   <p className="text-[10px] text-[#71717A] font-mono mt-0.5">
                     {chapters.length} chapters · {fileName}
                   </p>
+                  {savedAt && (
+                    <p className="text-[10px] text-emerald-400/70 font-mono mt-1 flex items-center gap-1">
+                      <Check className="w-3 h-3" /> Saved {savedAgo(savedAt)} — safe to refresh
+                    </p>
+                  )}
                 </div>
                 <button
                   type="button"
                   onClick={() => {
+                    if (
+                      completed > 0 &&
+                      !window.confirm(
+                        `Close "${doc.title}"? The ${completed} narrated chapter${completed === 1 ? '' : 's'} will be discarded.`,
+                      )
+                    ) {
+                      return;
+                    }
                     runningRef.current = false;
                     setDoc(null);
+                    setFileName('');
+                    setSavedAt(null);
                     releaseAudio();
+                    void clearSession('audiobook');
                   }}
                   className="text-[10px] uppercase tracking-wider text-zinc-500 hover:text-white cursor-pointer shrink-0"
                 >

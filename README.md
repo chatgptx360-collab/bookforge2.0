@@ -156,15 +156,27 @@ encodes MP3 on demand with lamejs (loaded lazily — most sessions never ask for
 it). Keeping this client-side is what makes book-length audio possible at all:
 neither the function timeout nor the response size caps how long a book can be.
 
-**Being throttled is not a failure.** Speech quotas are per minute and a book is
-thousands of calls, so a 429 is routine. The server reads the provider's own
-retry hint and hands it to the client rather than sleeping through the
-serverless timeout; the client waits it out with a visible countdown and carries
-on. Throttling and breakage get separate budgets — a quota window is sat through
+**Nothing is lost to a refresh.** Both views checkpoint themselves to IndexedDB
+as they go — no button, nothing to remember. Reload mid-book and the manuscript,
+the narrator, the delivery and every finished chapter come straight back,
+playable and downloadable; the run picks up where it stopped instead of
+re-spending the quota it already used. IndexedDB rather than localStorage
+because the payload is audio: one chapter is megabytes, and localStorage caps
+out around five for the entire origin.
+
+**Being throttled is not the same as being out.** A per-minute window is worth
+waiting for; a daily allowance is not. Provider 429s bury that distinction in a
+`quotaId` field inside a wall of nested JSON, so the server parses it out and
+says which it is. A per-minute limit is waited out with a visible countdown and
+the run continues. A daily limit stops immediately — the API still suggests a
+retry delay, but waiting 30 seconds for an allowance that refills tomorrow would
+waste the time and fail anyway — and the message says what the limit was and
+that Google's quotas reset at midnight Pacific. Either way the run stops rather
+than failing every remaining chapter, and what was narrated is kept.
+
+Throttling and breakage also get separate budgets: a quota window is sat through
 several times, while a 5xx is retried twice and then reported, so a real failure
-surfaces in seconds instead of after minutes of silent retrying. A quota that
-survives every wait is spent for the day, and the run stops there rather than
-failing every remaining chapter; what was narrated is kept.
+surfaces in seconds instead of after minutes of silent retrying.
 
 **A failed chapter does not end the run.** Chapters are narrated in order, and
 one that fails is marked and skipped; the rest continue and the failures can be
@@ -237,6 +249,7 @@ src/components/tts/        Voice catalogue hook and picker with previews
 src/components/reader/     Pagination content, panels, themes, book model
 src/utils/audio.ts         PCM stitching, WAV writer, lazy MP3 encoder
 src/utils/speech.ts        Speech client: safe parsing, quota waits, retries
+src/utils/sessionStore.ts  IndexedDB autosave for both speech views
 src/utils/readerStore.ts   Per-book position, bookmarks, highlights, settings
 src/utils/docxExporter.ts  Client-side KDP DOCX builder (lazy-loaded)
 tests/conversion.test.mjs  Round-trip and format-validity tests
