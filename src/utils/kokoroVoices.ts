@@ -105,3 +105,16 @@ export const KOKORO_VOICES: TtsVoice[] = [
 ];
 
 export const KOKORO_DEFAULT_VOICE = 'af_heart';
+
+/**
+ * Voice ids are per-engine, and the engine is remembered separately from the
+ * run. Restoring a Gemini voice while Kokoro is selected would ask the model
+ * for a voice it has never heard of, so the pairing is checked on the way in.
+ */
+export function voiceForEngine(engine: 'kokoro' | 'gemini', voice: string | undefined): string {
+  if (engine === 'kokoro') {
+    return voice && KOKORO_VOICES.some((v) => v.id === voice) ? voice : KOKORO_DEFAULT_VOICE;
+  }
+  // Gemini ids are the model's star names; a Kokoro id never looks like one.
+  return voice && !/^[a-z]{2}_/.test(voice) ? voice : 'Sulafat';
+}

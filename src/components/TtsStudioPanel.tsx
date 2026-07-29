@@ -3,7 +3,7 @@ import { AlertCircle, AudioLines, Check, Download, Loader2, Sparkles, Square } f
 import VoicePicker, { useVoiceCatalogue, voiceLabel } from './tts/VoicePicker';
 import { loadEngine, planChunks, speak, storeEngine, type Engine } from '../utils/speech';
 import { loadSession, savedAgo, saveSession } from '../utils/sessionStore';
-import { KOKORO_DEFAULT_VOICE, KOKORO_VOICES } from '../utils/kokoroVoices';
+import { KOKORO_DEFAULT_VOICE, KOKORO_VOICES, voiceForEngine } from '../utils/kokoroVoices';
 import {
   concatPcm,
   downloadBlob,
@@ -54,7 +54,10 @@ export default function TtsStudioPanel() {
         return;
       }
       setText(saved.text);
-      setVoice(saved.voice);
+      const savedEngine = saved.engine ?? loadEngine();
+      setEngine(savedEngine);
+      storeEngine(savedEngine);
+      setVoice(voiceForEngine(savedEngine, saved.voice));
       setStyle(saved.style);
       if (saved.audio) {
         const pcm = new Int16Array(saved.audio.pcm);
@@ -74,6 +77,7 @@ export default function TtsStudioPanel() {
       const stamp = Date.now();
       void saveSession('speech', {
         text,
+        engine,
         voice,
         style,
         audio: audio ? { pcm: audio.pcm, sampleRate: audio.sampleRate } : undefined,
@@ -81,7 +85,7 @@ export default function TtsStudioPanel() {
       }).then(() => setSavedAt(stamp));
     }, 800);
     return () => clearTimeout(timer);
-  }, [restoring, text, voice, style, audio]);
+  }, [restoring, text, voice, style, engine, audio]);
 
   // The picker is engine-agnostic; only the catalogue behind it changes.
   const activeCatalogue =
@@ -111,21 +115,33 @@ export default function TtsStudioPanel() {
         if (cancelRef.current) break;
         const where = `Speaking part ${index + 1} of ${chunks.length}…`;
         setBusy(where);
-        const payload = await speak(chunks[index], {
-          voice,
-          style,
-          engine,
-          onModelProgress: (fraction) =>
-            setBusy(`Downloading the local voice model — ${Math.round(fraction * 100)}%`),
-          shouldContinue: () => !cancelRef.current,
-          onThrottled: (secondsLeft) => setBusy(`Rate limited — resuming in ${secondsLeft}s`),
-        });
+        let payload;
+        try {
+          payload = await speak(chunks[index], {
+            voice,
+            style,
+            engine,
+            onModelProgress: (fraction) =>
+              setBusy(`Downloading the local voice model — ${Math.round(fraction * 100)}%`),
+            shouldContinue: () => !cancelRef.current,
+            onThrottled: (secondsLeft) => setBusy(`Rate limited — resuming in ${secondsLeft}s`),
+          });
+        } catch (err) {
+          // Pressing stop is a choice, not a failure: keep whatever was already
+          // spoken instead of discarding it and reporting an error.
+          if (err instanceof Error && err.message === 'Stopped.') break;
+          throw err;
+        }
         sampleRate = payload.sampleRate ?? sampleRate;
         parts.push(payload.pcm);
         if (index < chunks.length - 1) parts.push(silence(0.35, sampleRate));
       }
 
-      if (parts.length === 0) throw new Error('Nothing was generated.');
+      if (parts.length === 0) {
+        // Stopping before the first passage finished simply leaves nothing.
+        if (cancelRef.current) return;
+        throw new Error('Nothing was generated.');
+      }
       const pcm = concatPcm(parts);
       const url = URL.createObjectURL(encodeWav(pcm, sampleRate));
       setAudio({ pcm, sampleRate, url });

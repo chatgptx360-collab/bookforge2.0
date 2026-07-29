@@ -100,17 +100,69 @@ function floatToPcm(samples: Float32Array): Int16Array {
 }
 
 /**
+ * The model truncates at 509 phoneme tokens, silently. Phonemes run close to
+ * one per character for English, so this cap leaves a wide margin — a piece
+ * this size cannot reach the limit whatever it contains.
+ */
+const MAX_PIECE_CHARS = 320;
+
+/** Sentence-ish split that keeps terminal punctuation and closing quotes. */
+function splitSentences(text: string): string[] {
+  return text.match(/[^.!?…]+(?:[.!?…]+["'”’»)\]]*|$)/g)?.map((s) => s.trim()).filter(Boolean) ?? [];
+}
+
+/**
+ * Breaks text into pieces the model can take whole.
+ *
+ * Sentences are the natural unit, but a sentence can itself be longer than the
+ * limit — an unpunctuated passage, a long list, verse — and that case is the
+ * dangerous one, because the text still counts as "spoken" while its audio is
+ * quietly cut off. Those are split again at clause boundaries, then at spaces
+ * as a last resort, so nothing ever reaches the model oversized.
+ */
+export function splitForKokoro(text: string, limit = MAX_PIECE_CHARS): string[] {
+  const pieces: string[] = [];
+  let current = '';
+
+  const flush = () => {
+    if (current.trim()) pieces.push(current.trim());
+    current = '';
+  };
+
+  for (const sentence of splitSentences(text)) {
+    if (sentence.length <= limit) {
+      if (`${current} ${sentence}`.trim().length > limit) flush();
+      current = current ? `${current} ${sentence}` : sentence;
+      continue;
+    }
+    flush();
+    // Oversized sentence: clause boundaries first, then words, and finally a
+    // blind chop — a single unbroken run (a URL, a hash, a stretch with no
+    // spaces at all) has no natural break and must still be cut somewhere.
+    for (const clause of sentence.split(/(?<=[,;:—–])\s+/)) {
+      for (const word of clause.split(/\s+/).filter(Boolean)) {
+        for (let at = 0; at < word.length; at += limit) {
+          const part = word.slice(at, at + limit);
+          if (`${current} ${part}`.trim().length > limit) flush();
+          current = current ? `${current} ${part}` : part;
+        }
+      }
+    }
+    flush();
+  }
+  flush();
+
+  return pieces.length > 0 ? pieces : [text.trim()].filter(Boolean);
+}
+
+/**
  * Speaks a passage of any length.
  *
- * `generate()` cannot be used directly: it tokenises with `truncation: true`
- * and the model caps input at 509 tokens, so anything longer is cut off
- * *silently* — no error, just a short clip and the rest of the paragraph gone.
- * At the chunk sizes a book uses that would quietly drop most of every passage.
- *
- * `stream()` runs the library's own sentence splitter (which knows about
- * abbreviations, quotes and decimals) and synthesises one sentence at a time,
- * so nothing is ever handed to the model over its limit. The pieces are
- * concatenated back into a single passage here.
+ * `generate()` tokenises with `truncation: true` and the model caps input at
+ * 509 tokens, so anything longer is cut off *silently* — no error, just a short
+ * clip and the rest of the paragraph gone. Splitting is therefore not an
+ * optimisation but the thing that makes the output correct, and it is done
+ * here rather than left to the library so the piece size is guaranteed.
  */
 export async function speakWithKokoro(
   text: string,
@@ -121,26 +173,31 @@ export async function speakWithKokoro(
 ): Promise<{ pcm: Int16Array; sampleRate: number }> {
   const model = await loadKokoro(onProgress);
 
+  const parts = splitForKokoro(text);
+  if (parts.length === 0) throw new Error('There was nothing to speak in this passage.');
+
   const pieces: Int16Array[] = [];
   let sampleRate = KOKORO_SAMPLE_RATE;
-  let spoken = '';
+  let spoken = 0;
 
-  for await (const chunk of model.stream(text, { voice, speed })) {
+  for (let index = 0; index < parts.length; index++) {
     if (shouldContinue && !shouldContinue()) throw new Error('Stopped.');
-    pieces.push(floatToPcm(chunk.audio.audio));
-    sampleRate = chunk.audio.sampling_rate || sampleRate;
-    spoken += chunk.text;
+    const result = await model.generate(parts[index], { voice, speed });
+    pieces.push(floatToPcm(result.audio));
+    sampleRate = result.sampling_rate || sampleRate;
+    spoken += parts[index].replace(/\s+/g, '').length;
+    // A short pause between pieces, but never after the last one.
+    if (index < parts.length - 1) pieces.push(new Int16Array(Math.round(0.08 * sampleRate)));
   }
 
   if (pieces.length === 0) throw new Error('Kokoro produced no audio for this passage.');
 
-  // A silent truncation is the one failure that would not announce itself, so
-  // compare what was spoken against what was asked for.
+  // Second net: if splitting ever drops text, that is exactly the failure that
+  // would not announce itself, so refuse to return a mutilated passage.
   const asked = text.replace(/\s+/g, '').length;
-  const said = spoken.replace(/\s+/g, '').length;
-  if (asked > 0 && said / asked < 0.9) {
+  if (asked > 0 && spoken / asked < 0.95) {
     throw new Error(
-      `Only ${Math.round((said / asked) * 100)}% of the passage was spoken — the rest would have been lost silently.`,
+      `Only ${Math.round((spoken / asked) * 100)}% of the passage was prepared for speech — the rest would have been lost silently.`,
     );
   }
 

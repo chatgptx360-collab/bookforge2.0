@@ -68,6 +68,30 @@ export function encodeWav(pcm: Int16Array, sampleRate = PCM_SAMPLE_RATE, channel
 }
 
 /**
+ * Reads back a WAV this module wrote, recovering its true sample rate.
+ *
+ * Chapters are stored as WAV blobs, and re-encoding them assumed 24kHz. Both
+ * engines happen to emit that today, but the rate is right there in the header
+ * and guessing it would play a chapter at the wrong speed the moment one
+ * differs.
+ */
+export async function decodeWav(blob: Blob): Promise<{ pcm: Int16Array; sampleRate: number }> {
+  const buffer = await blob.arrayBuffer();
+  if (buffer.byteLength < 44) throw new Error('That audio file is too short to be a WAV.');
+
+  const view = new DataView(buffer);
+  const ascii = (offset: number, length: number) =>
+    String.fromCharCode(...new Uint8Array(buffer, offset, length));
+  if (ascii(0, 4) !== 'RIFF' || ascii(8, 4) !== 'WAVE') throw new Error('That file is not a WAV.');
+
+  const sampleRate = view.getUint32(24, true) || PCM_SAMPLE_RATE;
+  const dataSize = view.getUint32(40, true);
+  // Trust the declared size, but never read past the buffer.
+  const length = Math.min(dataSize || buffer.byteLength - 44, buffer.byteLength - 44);
+  return { pcm: new Int16Array(buffer.slice(44, 44 + length - (length % 2))), sampleRate };
+}
+
+/**
  * Encodes to MP3 with lamejs. Loaded on demand — the encoder is large and most
  * sessions never ask for MP3.
  */

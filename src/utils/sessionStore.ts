@@ -22,6 +22,8 @@ export interface AudiobookChapterSave {
 
 export interface AudiobookSession {
   fileName: string;
+  /** Saved with the voice: a voice id only means something for its own engine. */
+  engine?: 'kokoro' | 'gemini';
   doc: unknown;
   voice: string;
   style: string;
@@ -38,6 +40,7 @@ export interface AudiobookSession {
 
 export interface SpeechSession {
   text: string;
+  engine?: 'kokoro' | 'gemini';
   voice: string;
   style: string;
   audio?: { pcm: Int16Array; sampleRate: number };

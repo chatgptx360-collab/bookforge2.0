@@ -13,6 +13,7 @@ import {
 import VoicePicker, { useVoiceCatalogue, voiceLabel } from './tts/VoicePicker';
 import {
   concatPcm,
+  decodeWav,
   downloadBlob,
   encodeMp3,
   encodeWav,
@@ -32,7 +33,7 @@ import {
   type Engine,
 } from '../utils/speech';
 import { clearSession, loadSession, savedAgo, saveSession } from '../utils/sessionStore';
-import { KOKORO_DEFAULT_VOICE, KOKORO_VOICES } from '../utils/kokoroVoices';
+import { KOKORO_DEFAULT_VOICE, KOKORO_VOICES, voiceForEngine } from '../utils/kokoroVoices';
 import type { ParsedDocument, ParsedSection } from '../types';
 
 const ENGINES = [
@@ -73,6 +74,8 @@ export default function AudiobookPanel() {
   // closing over a stale snapshot.
   const audioRef = useRef(audio);
   audioRef.current = audio;
+  const includedRef = useRef(included);
+  includedRef.current = included;
 
   const releaseAudio = useCallback(() => {
     Object.values(audioRef.current).forEach((entry) => entry.url && URL.revokeObjectURL(entry.url));
@@ -98,7 +101,10 @@ export default function AudiobookPanel() {
       }
       setDoc(saved.doc as ParsedDocument);
       setFileName(saved.fileName);
-      setVoice(saved.voice);
+      const savedEngine = saved.engine ?? loadEngine();
+      setEngine(savedEngine);
+      storeEngine(savedEngine);
+      setVoice(voiceForEngine(savedEngine, saved.voice));
       setStyle(saved.style);
       setAnnounceChapters(saved.announceChapters);
       setIncluded(
@@ -145,6 +151,7 @@ export default function AudiobookPanel() {
       const stamp = Date.now();
       void saveSession('audiobook', {
         fileName,
+        engine,
         doc,
         voice,
         style,
@@ -155,7 +162,7 @@ export default function AudiobookPanel() {
       }).then(() => setSavedAt(stamp));
     }, 800);
     return () => clearTimeout(timer);
-  }, [restoring, doc, fileName, voice, style, announceChapters, included, audio]);
+  }, [restoring, doc, fileName, voice, style, announceChapters, engine, included, audio]);
 
   // The picker is engine-agnostic; only the catalogue behind it changes.
   const activeCatalogue =
@@ -193,13 +200,17 @@ export default function AudiobookPanel() {
     async (section: ParsedSection, index: number) => {
       const body = announceChapters && section.title ? `${section.title}.\n\n${section.content}` : section.content;
       const chunks = await planChunks(body);
+      // Position within the run, not within the file — skipped sections are
+      // not being narrated and should not inflate the total.
+      const order = chapters.map((_, i) => i).filter((i) => includedRef.current[i] !== false);
+      const place = order.indexOf(index) + 1;
 
       const parts: Int16Array[] = [];
       let sampleRate = 24000;
 
       for (let piece = 0; piece < chunks.length; piece++) {
         if (!runningRef.current) throw new Error('Stopped.');
-        const where = `Chapter ${index + 1} of ${chapters.length} — part ${piece + 1}/${chunks.length}`;
+        const where = `Section ${place || index + 1} of ${order.length || chapters.length} — part ${piece + 1}/${chunks.length}`;
         setStatus(where);
         const payload = await speak(chunks[piece], {
           voice,
@@ -287,9 +298,11 @@ export default function AudiobookPanel() {
     }
     setStatus('Encoding MP3…');
     try {
-      const buffer = await entry.blob.arrayBuffer();
-      const pcm = new Int16Array(buffer.slice(44));
-      downloadBlob(await encodeMp3(pcm), `${base}.mp3`);
+      const { pcm, sampleRate } = await decodeWav(entry.blob);
+      downloadBlob(await encodeMp3(pcm, sampleRate), `${base}.mp3`);
+    } catch (err) {
+      // Without this the rejection was unhandled and the click looked ignored.
+      setError(err instanceof Error ? `MP3 encoding failed: ${err.message}` : 'MP3 encoding failed.');
     } finally {
       setStatus(null);
     }
@@ -309,8 +322,8 @@ export default function AudiobookPanel() {
           zip.file(`${base}.wav`, blob);
         } else {
           setStatus(`Encoding chapter ${index + 1} to MP3…`);
-          const pcm = new Int16Array((await blob.arrayBuffer()).slice(44));
-          zip.file(`${base}.mp3`, await encodeMp3(pcm));
+          const { pcm, sampleRate } = await decodeWav(blob);
+          zip.file(`${base}.mp3`, await encodeMp3(pcm, sampleRate));
         }
       }
       const archive = await zip.generateAsync({ type: 'blob' });

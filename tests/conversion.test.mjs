@@ -532,3 +532,56 @@ test('an EPUB 2 package is rejected, not quietly accepted', () => {
   assert.ok(check.warnings.some((w) => /guide/.test(w)));
   assert.ok(check.warnings.some((w) => /toc attribute/.test(w)));
 });
+
+// --- local speech splitting -------------------------------------------------
+//
+// The model truncates over-long input silently, so the splitter is the only
+// thing standing between a book and audio that quietly loses half its words.
+
+test('no piece can reach the model input limit', async () => {
+  const { splitForKokoro } = await import('../src/utils/kokoro.ts');
+
+  const cases = [
+    'Short line.',
+    Array(60).fill('She climbed the stair and the lamp turned once more.').join(' '),
+    // The dangerous case: one sentence, no terminal punctuation, far too long.
+    'word '.repeat(900).trim(),
+    // Clause-heavy prose with no full stop for a very long stretch.
+    Array(80).fill('and then, quietly, she went on').join(', '),
+    'A'.repeat(2000),
+  ];
+
+  for (const source of cases) {
+    const pieces = splitForKokoro(source);
+    for (const piece of pieces) {
+      assert.ok(piece.length <= 320, `piece of ${piece.length} chars exceeds the safe limit`);
+    }
+    // Nothing may be dropped. Compared without whitespace, because a run with
+    // no spaces in it has to be broken somewhere and that break adds one.
+    const bare = (t) => t.replace(/\s+/g, '');
+    assert.equal(bare(pieces.join('')), bare(source), 'text was lost while splitting');
+  }
+});
+
+test('splitting prefers sentence ends over mid-sentence cuts', async () => {
+  const { splitForKokoro } = await import('../src/utils/kokoro.ts');
+  const pieces = splitForKokoro(Array(12).fill('The keeper was gone and the light had failed.').join(' '));
+  assert.ok(pieces.length > 1);
+  for (const piece of pieces) assert.match(piece, /\.$/, 'a piece ended mid-sentence');
+});
+
+test('a restored voice is never handed to the wrong engine', async () => {
+  const { voiceForEngine } = await import('../src/utils/kokoroVoices.ts');
+
+  // The bug this guards: a Gemini voice surviving a switch to the local engine,
+  // which then fails with "voice not found" on every chapter.
+  assert.equal(voiceForEngine('kokoro', 'Sulafat'), 'af_heart');
+  assert.equal(voiceForEngine('gemini', 'af_heart'), 'Sulafat');
+  // A valid pairing is left alone.
+  assert.equal(voiceForEngine('kokoro', 'bm_george'), 'bm_george');
+  assert.equal(voiceForEngine('gemini', 'Orus'), 'Orus');
+  // Missing or unknown falls back to that engine's default.
+  assert.equal(voiceForEngine('kokoro', undefined), 'af_heart');
+  assert.equal(voiceForEngine('kokoro', 'not_a_voice'), 'af_heart');
+  assert.equal(voiceForEngine('gemini', undefined), 'Sulafat');
+});

@@ -128,10 +128,11 @@ export async function speak(text: string, options: SpeakOptions): Promise<Speech
     try {
       return await speakWithKokoro(text, voice, 1, onModelProgress, shouldContinue);
     } catch (error) {
-      throw new SpeechError(
-        error instanceof Error ? `Local speech failed: ${error.message}` : 'Local speech failed.',
-        0,
-      );
+      const detail = error instanceof Error ? error.message : '';
+      // A stop is not a failure, and callers recognise it by this exact
+      // message — wrapping it turned "stopped" into "this chapter broke".
+      if (detail === 'Stopped.') throw new SpeechError('Stopped.', 0);
+      throw new SpeechError(detail ? `Local speech failed: ${detail}` : 'Local speech failed.', 0);
     }
   }
 

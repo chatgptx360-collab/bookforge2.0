@@ -112,6 +112,7 @@ export default function VoicePicker({
 }) {
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
 
   const preview = async (voice: string) => {
@@ -120,13 +121,24 @@ export default function VoicePicker({
     try {
       // A preview is a single short line, so it should not sit waiting out a
       // quota window the way a book-length run does.
-      const payload = await speak(PREVIEW_LINE, { voice, engine, maxRetries: 0, onModelProgress: onModelProgress });
+      const payload = await speak(PREVIEW_LINE, {
+        voice,
+        engine,
+        maxRetries: 0,
+        // The first local preview downloads the model; a silent spinner for
+        // ninety megabytes reads as a hang.
+        onModelProgress: (fraction) => {
+          setPreviewLoading(`Downloading the voice model — ${Math.round(fraction * 100)}%`);
+          onModelProgress?.(fraction, 'model');
+        },
+      });
       const audio = new Audio(URL.createObjectURL(encodeWav(payload.pcm, payload.sampleRate)));
       await audio.play();
     } catch (error) {
       setPreviewError(error instanceof Error ? error.message : 'Preview failed.');
     } finally {
       setPreviewing(null);
+      setPreviewLoading(null);
     }
   };
 
@@ -157,6 +169,9 @@ export default function VoicePicker({
 
       {previewError && (
         <p className="text-[10px] text-red-400 leading-relaxed px-0.5">{previewError}</p>
+      )}
+      {previewLoading && (
+        <p className="text-[10px] text-[#D4AF37] leading-relaxed px-0.5">{previewLoading}</p>
       )}
 
       <div className="max-h-[26rem] overflow-y-auto pr-1 space-y-1.5">
