@@ -34,7 +34,7 @@ import {
   type Engine,
 } from '../utils/speech';
 import { clearSession, loadSession, savedAgo, saveSession } from '../utils/sessionStore';
-import { KOKORO_DEFAULT_VOICE, KOKORO_VOICES, voiceForEngine } from '../utils/kokoroVoices';
+import { detectWebGpu, KOKORO_DEFAULT_VOICE, KOKORO_VOICES, voiceForEngine } from '../utils/kokoroVoices';
 import type { ParsedDocument, ParsedSection } from '../types';
 
 const ENGINES = [
@@ -66,6 +66,11 @@ export default function AudiobookPanel() {
   const [engine, setEngine] = useState<Engine>(() => loadEngine());
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [restoring, setRestoring] = useState(true);
+  const [gpu, setGpu] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    void detectWebGpu().then(setGpu);
+  }, []);
   // Which sections to narrate. A table of contents is meaningless read aloud,
   // so it starts excluded; everything else starts in.
   const [included, setIncluded] = useState<Record<number, boolean>>({});
@@ -548,7 +553,9 @@ export default function AudiobookPanel() {
               ))}
               <p className="text-[10px] text-[#52525B] leading-relaxed w-full mt-1">
                 {engine === 'kokoro'
-                  ? 'Runs on this device. Free and unlimited, no key — the voice model downloads once (~90MB) and is then cached. It cannot be given a delivery instruction.'
+                  ? `Runs on this device. Free and unlimited, no key — the voice model downloads once and is then cached. It cannot be given a delivery instruction.${
+                      gpu === null ? '' : gpu ? ' Your GPU is available, so narration runs fast.' : ' No WebGPU here, so it falls back to the CPU and runs several times slower.'
+                    }`
                   : 'Runs on Google\u2019s servers. Takes a delivery instruction, but needs an API key and is limited by its quota.'}
               </p>
             </div>
