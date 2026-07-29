@@ -126,7 +126,7 @@ export async function speak(text: string, options: SpeakOptions): Promise<Speech
     if (stopped()) throw new SpeechError('Stopped.', 0);
     const { speakWithKokoro } = await import('./kokoro');
     try {
-      return await speakWithKokoro(text, voice, 1, onModelProgress);
+      return await speakWithKokoro(text, voice, 1, onModelProgress, shouldContinue);
     } catch (error) {
       throw new SpeechError(
         error instanceof Error ? `Local speech failed: ${error.message}` : 'Local speech failed.',

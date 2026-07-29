@@ -13,6 +13,11 @@ export interface TtsVoice {
   gender: 'male' | 'female';
   goodFor: string;
   bestFor: string[];
+  /**
+   * Kokoro publishes a quality grade per voice and they vary a lot — an A
+   * carries a whole book, an F+ does not. Shown so the choice is informed.
+   */
+  grade?: string;
 }
 
 export interface VoiceCatalogue {
@@ -180,7 +185,21 @@ export default function VoicePicker({
                   >
                     {voice.character}
                   </span>
-                  {/* Kept visible so a voice can still be matched to Google's docs. */}
+                  {voice.grade && (
+                    <span
+                      title={`Model quality grade: ${voice.grade}`}
+                      className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+                        /^[AB]/.test(voice.grade)
+                          ? 'text-emerald-300 border-emerald-500/30 bg-emerald-950/20'
+                          : /^C/.test(voice.grade)
+                            ? 'text-amber-300 border-amber-500/30 bg-amber-950/20'
+                            : 'text-red-300/80 border-red-500/25 bg-red-950/20'
+                      }`}
+                    >
+                      {voice.grade}
+                    </span>
+                  )}
+                  {/* Kept visible so a voice can still be matched to the model docs. */}
                   <span className="text-[9px] font-mono text-[#3F3F46]">{voice.id}</span>
                 </div>
                 <p className="text-[10px] text-[#71717A] mt-0.5 truncate">{voice.goodFor}</p>

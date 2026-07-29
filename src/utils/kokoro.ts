@@ -23,6 +23,10 @@ interface RawAudio {
 
 interface KokoroModel {
   generate(text: string, options: { voice: string; speed?: number }): Promise<RawAudio>;
+  stream(
+    text: string,
+    options: { voice: string; speed?: number },
+  ): AsyncGenerator<{ text: string; audio: RawAudio }, void, void>;
 }
 
 let loading: Promise<KokoroModel> | null = null;
@@ -95,14 +99,59 @@ function floatToPcm(samples: Float32Array): Int16Array {
   return pcm;
 }
 
+/**
+ * Speaks a passage of any length.
+ *
+ * `generate()` cannot be used directly: it tokenises with `truncation: true`
+ * and the model caps input at 509 tokens, so anything longer is cut off
+ * *silently* — no error, just a short clip and the rest of the paragraph gone.
+ * At the chunk sizes a book uses that would quietly drop most of every passage.
+ *
+ * `stream()` runs the library's own sentence splitter (which knows about
+ * abbreviations, quotes and decimals) and synthesises one sentence at a time,
+ * so nothing is ever handed to the model over its limit. The pieces are
+ * concatenated back into a single passage here.
+ */
 export async function speakWithKokoro(
   text: string,
   voice: string,
   speed = 1,
   onProgress?: (fraction: number, label: string) => void,
+  shouldContinue?: () => boolean,
 ): Promise<{ pcm: Int16Array; sampleRate: number }> {
   const model = await loadKokoro(onProgress);
-  const result = await model.generate(text, { voice, speed });
-  return { pcm: floatToPcm(result.audio), sampleRate: result.sampling_rate || KOKORO_SAMPLE_RATE };
+
+  const pieces: Int16Array[] = [];
+  let sampleRate = KOKORO_SAMPLE_RATE;
+  let spoken = '';
+
+  for await (const chunk of model.stream(text, { voice, speed })) {
+    if (shouldContinue && !shouldContinue()) throw new Error('Stopped.');
+    pieces.push(floatToPcm(chunk.audio.audio));
+    sampleRate = chunk.audio.sampling_rate || sampleRate;
+    spoken += chunk.text;
+  }
+
+  if (pieces.length === 0) throw new Error('Kokoro produced no audio for this passage.');
+
+  // A silent truncation is the one failure that would not announce itself, so
+  // compare what was spoken against what was asked for.
+  const asked = text.replace(/\s+/g, '').length;
+  const said = spoken.replace(/\s+/g, '').length;
+  if (asked > 0 && said / asked < 0.9) {
+    throw new Error(
+      `Only ${Math.round((said / asked) * 100)}% of the passage was spoken — the rest would have been lost silently.`,
+    );
+  }
+
+  const total = pieces.reduce((sum, piece) => sum + piece.length, 0);
+  const pcm = new Int16Array(total);
+  let offset = 0;
+  for (const piece of pieces) {
+    pcm.set(piece, offset);
+    offset += piece.length;
+  }
+
+  return { pcm, sampleRate };
 }
 
