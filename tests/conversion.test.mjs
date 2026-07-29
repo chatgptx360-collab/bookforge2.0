@@ -617,3 +617,21 @@ test('a passage opening on an ellipsis keeps it', async () => {
     assert.equal(bare(splitForKokoro(source).join('')), bare(source), `text lost in: ${source}`);
   }
 });
+
+test('audio far shorter than its text is treated as incomplete', async () => {
+  const { audioLooksComplete, CHARS_PER_SECOND } = await import('../src/utils/audio.ts');
+  const rate = 24000;
+  const pcmOf = (seconds) => new Int16Array(Math.round(seconds * rate));
+  const text = 'x'.repeat(280); // ~20s of speech
+
+  // A full read passes; so does a brisk one, because pace varies by voice.
+  assert.ok(audioLooksComplete(pcmOf(280 / CHARS_PER_SECOND), rate, text).ok);
+  assert.ok(audioLooksComplete(pcmOf(14), rate, text).ok, 'a fast but complete read must not be rejected');
+
+  // A paragraph dropped mid-passage, and nothing at all, must both be caught.
+  assert.ok(!audioLooksComplete(pcmOf(4), rate, text).ok, 'a truncated passage slipped through');
+  assert.ok(!audioLooksComplete(new Int16Array(0), rate, text).ok, 'empty audio slipped through');
+
+  // Very short text is exempt: a two-word line is too noisy to judge.
+  assert.ok(audioLooksComplete(pcmOf(0.2), rate, 'Yes.').ok);
+});

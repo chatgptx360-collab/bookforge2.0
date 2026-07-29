@@ -107,6 +107,19 @@ function floatToPcm(samples: Float32Array): Int16Array {
 const MAX_PIECE_CHARS = 320;
 
 /**
+ * Speech runs at roughly 14 characters a second. Kept here rather than imported
+ * so this module has no runtime dependencies at all — it is loaded by a test
+ * runner that resolves imports more strictly than the bundler does.
+ * `audioLooksComplete` in ./audio applies the same rule to the hosted engine.
+ */
+function looksComplete(pcm: Int16Array, sampleRate: number, text: string) {
+  const seconds = pcm.length / Math.max(1, sampleRate);
+  const expected = text.trim().length / 14;
+  // Generous: pace varies between voices, and a false alarm costs a good run.
+  return { ok: expected < 1.5 || seconds >= expected * 0.45, seconds, expected };
+}
+
+/**
  * Sentence-ish split that keeps terminal punctuation and closing quotes.
  *
  * The leading alternative has to allow an empty body, or a passage opening on
@@ -212,27 +225,45 @@ export async function speakWithKokoro(
       continue;
     }
 
-    let result;
-    try {
-      result = await model.generate(piece, { voice, speed });
-    } catch (first) {
-      // One retry: a transient allocation failure inside the runtime should not
-      // cost a whole chapter.
+    // Two attempts. The first covers a transient allocation failure inside the
+    // runtime; both also cover the quieter fault below.
+    let pcm: Int16Array | null = null;
+    let failure = '';
+
+    for (let attempt = 0; attempt < 2 && pcm === null; attempt++) {
       if (shouldContinue && !shouldContinue()) throw new Error('Stopped.');
       try {
-        result = await model.generate(piece, { voice, speed });
-      } catch {
-        const detail = first instanceof Error ? first.message : String(first);
-        // Name the passage that failed — "chapter 3 failed" is not enough to
-        // act on, and this is the text that has to be looked at.
-        throw new Error(
-          `Speech failed on passage ${index + 1} of ${parts.length} ("${piece.slice(0, 60)}…"): ${detail}`,
-        );
+        const result = await model.generate(piece, { voice, speed });
+        const rate = result.sampling_rate || sampleRate;
+        const candidate = floatToPcm(result.audio);
+
+        // The failure that leaves no trace: audio returned for only part of the
+        // passage, or none at all. Nothing throws, the clip is just short, and
+        // the paragraph is gone from the finished chapter.
+        const check = looksComplete(candidate, rate, piece);
+        if (!check.ok) {
+          failure =
+            `only ${check.seconds.toFixed(1)}s of audio for ${piece.length} characters ` +
+            `(about ${check.expected.toFixed(1)}s expected)`;
+          continue;
+        }
+
+        pcm = candidate;
+        sampleRate = rate;
+      } catch (error) {
+        failure = error instanceof Error ? error.message : String(error);
       }
     }
 
-    pieces.push(floatToPcm(result.audio));
-    sampleRate = result.sampling_rate || sampleRate;
+    if (pcm === null) {
+      // Name the passage — "chapter 3 failed" is not enough to act on, and this
+      // is the text that has to be looked at.
+      throw new Error(
+        `Speech failed on passage ${index + 1} of ${parts.length} ("${piece.slice(0, 60)}…"): ${failure}`,
+      );
+    }
+
+    pieces.push(pcm);
     // A short pause between pieces, but never after the last one.
     if (index < parts.length - 1) pieces.push(new Int16Array(Math.round(0.08 * sampleRate)));
   }

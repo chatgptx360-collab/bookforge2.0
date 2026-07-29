@@ -156,11 +156,29 @@ export async function speak(text: string, options: SpeakOptions): Promise<Speech
 
     if (response.ok) {
       const payload = await readJson(response);
-      const { base64ToPcm } = await import('./audio');
-      return {
-        pcm: base64ToPcm(String(payload.audioBase64)),
-        sampleRate: Number(payload.sampleRate) || 24000,
-      };
+      const { base64ToPcm, audioLooksComplete } = await import('./audio');
+      const pcm = base64ToPcm(String(payload.audioBase64));
+      const sampleRate = Number(payload.sampleRate) || 24000;
+
+      // The hosted model can return a clip covering only part of what it was
+      // sent. Nothing errors, the passage is simply short, and the missing
+      // words only surface on listening to the finished book — so a gross
+      // shortfall is retried rather than accepted.
+      const check = audioLooksComplete(pcm, sampleRate, text);
+      if (!check.ok && serverRetries < maxServerRetries) {
+        serverRetries++;
+        await sleep(800);
+        continue;
+      }
+      if (!check.ok) {
+        throw new SpeechError(
+          `Only ${check.seconds.toFixed(1)}s of audio came back for ${text.length} characters ` +
+            `(about ${check.expected.toFixed(0)}s expected) — part of the passage was not spoken.`,
+          response.status,
+        );
+      }
+
+      return { pcm, sampleRate };
     }
 
     const payload: Record<string, unknown> = await readJson(response).catch((error: SpeechError) => ({

@@ -9,6 +9,34 @@
 
 export const PCM_SAMPLE_RATE = 24000;
 
+/**
+ * Speech runs at roughly 14 characters a second at a natural narration pace.
+ * Used to sanity-check what a model gives back: audio far shorter than the
+ * text implies means part of the passage was not spoken.
+ */
+export const CHARS_PER_SECOND = 14;
+
+/**
+ * Guards against the failure that leaves no trace — a model returning a clip
+ * for only part of what it was given, or nothing at all.
+ *
+ * A synthesiser that quietly drops a paragraph produces a shorter file and no
+ * error, so the run looks like a success and the missing words are only found
+ * by listening to the whole book. Comparing duration against the text length
+ * catches it at the passage that caused it.
+ */
+export function audioLooksComplete(
+  pcm: Int16Array,
+  sampleRate: number,
+  text: string,
+): { ok: boolean; seconds: number; expected: number } {
+  const seconds = pcm.length / Math.max(1, sampleRate);
+  const expected = text.trim().length / CHARS_PER_SECOND;
+  // Generous: pace varies a lot between voices and passages, and a false alarm
+  // costs a working run. Only a gross shortfall is treated as a fault.
+  return { ok: expected < 1.5 || seconds >= expected * 0.45, seconds, expected };
+}
+
 export function base64ToPcm(base64: string): Int16Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
