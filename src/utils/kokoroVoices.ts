@@ -119,21 +119,3 @@ export function voiceForEngine(engine: 'kokoro' | 'gemini', voice: string | unde
   return voice && !/^[a-z]{2}_/.test(voice) ? voice : 'Sulafat';
 }
 
-/**
- * Whether this browser can hand the model to the GPU.
- *
- * WebGPU is not a service and has no quota — it is the machine's own graphics
- * card, reached from the page. Either the browser exposes it or it does not,
- * and the difference is roughly an order of magnitude in narration speed, so
- * it is worth telling people which one they are getting before they commit a
- * book to it.
- */
-export async function detectWebGpu(): Promise<boolean> {
-  const gpu = (navigator as { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
-  if (!gpu) return false;
-  try {
-    return Boolean(await gpu.requestAdapter());
-  } catch {
-    return false;
-  }
-}

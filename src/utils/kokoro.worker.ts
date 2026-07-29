@@ -13,6 +13,8 @@
  * cost is paid on the first passage only.
  */
 
+import { inspectGpu } from './gpu';
+
 export type WorkerRequest =
   | { id: number; type: 'load' }
   | { id: number; type: 'speak'; text: string; voice: string; speed: number };
@@ -37,22 +39,15 @@ let model: KokoroModel | null = null;
 let loading: Promise<KokoroModel> | null = null;
 let device: 'webgpu' | 'wasm' = 'wasm';
 
-async function hasWebGpu(): Promise<boolean> {
-  const gpu = (self.navigator as { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
-  if (!gpu) return false;
-  try {
-    return Boolean(await gpu.requestAdapter());
-  } catch {
-    return false;
-  }
-}
 
 function load(id: number): Promise<KokoroModel> {
   if (loading) return loading;
 
   loading = (async () => {
     const { KokoroTTS } = await import('kokoro-js');
-    device = (await hasWebGpu()) ? 'webgpu' : 'wasm';
+    // Only a hardware adapter earns the WebGPU path. A software one would
+    // pull four times the weights and then run them slower than WASM does.
+    device = (await inspectGpu(self)).usable ? 'webgpu' : 'wasm';
 
     const loaded = await KokoroTTS.from_pretrained(MODEL_ID, {
       // WebGPU can afford full precision and sounds better for it; the WASM

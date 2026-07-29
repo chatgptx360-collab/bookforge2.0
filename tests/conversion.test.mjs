@@ -635,3 +635,37 @@ test('audio far shorter than its text is treated as incomplete', async () => {
   // Very short text is exempt: a two-word line is too noisy to judge.
   assert.ok(audioLooksComplete(pcmOf(0.2), rate, 'Yes.').ok);
 });
+
+test('a software adapter is not mistaken for a graphics card', async () => {
+  const { inspectGpu } = await import('../src/utils/gpu.ts');
+
+  const scope = (gpu) => ({ navigator: { gpu } });
+
+  // No WebGPU at all.
+  assert.equal((await inspectGpu(scope(undefined))).reason, 'unsupported');
+  // Present, but refuses to hand over an adapter.
+  assert.equal((await inspectGpu(scope({ requestAdapter: async () => null }))).reason, 'unavailable');
+
+  // The case that matters: Chrome reporting "Software only". Accepting this
+  // would fetch four times the weights and run them on a CPU rasterizer.
+  assert.equal(
+    (await inspectGpu(scope({ requestAdapter: async () => ({ isFallbackAdapter: true }) }))).reason,
+    'software',
+  );
+  for (const description of ['SwiftShader Device', 'llvmpipe (LLVM 15)', 'Microsoft Basic Render Driver']) {
+    const verdict = await inspectGpu(scope({ requestAdapter: async () => ({ info: { description } }) }));
+    assert.equal(verdict.usable, false, `${description} was accepted as hardware`);
+    assert.equal(verdict.reason, 'software');
+  }
+
+  // A real card is accepted, including via the older info spelling.
+  const real = await inspectGpu(scope({ requestAdapter: async () => ({ info: { vendor: 'nvidia', architecture: 'ampere' } }) }));
+  assert.equal(real.usable, true, real.describe);
+  const older = await inspectGpu(
+    scope({ requestAdapter: async () => ({ requestAdapterInfo: async () => ({ vendor: 'apple', architecture: 'metal-3' }) }) }),
+  );
+  assert.equal(older.usable, true, older.describe);
+
+  // A throwing requestAdapter must not take the page down with it.
+  assert.equal((await inspectGpu(scope({ requestAdapter: async () => { throw new Error('no'); } }))).usable, false);
+});

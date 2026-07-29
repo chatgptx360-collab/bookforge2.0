@@ -34,7 +34,8 @@ import {
   type Engine,
 } from '../utils/speech';
 import { clearSession, loadSession, savedAgo, saveSession } from '../utils/sessionStore';
-import { detectWebGpu, KOKORO_DEFAULT_VOICE, KOKORO_VOICES, voiceForEngine } from '../utils/kokoroVoices';
+import { KOKORO_DEFAULT_VOICE, KOKORO_VOICES, voiceForEngine } from '../utils/kokoroVoices';
+import { inspectGpu, type GpuVerdict } from '../utils/gpu';
 import type { ParsedDocument, ParsedSection } from '../types';
 
 const ENGINES = [
@@ -66,10 +67,10 @@ export default function AudiobookPanel() {
   const [engine, setEngine] = useState<Engine>(() => loadEngine());
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [restoring, setRestoring] = useState(true);
-  const [gpu, setGpu] = useState<boolean | null>(null);
+  const [gpu, setGpu] = useState<GpuVerdict | null>(null);
 
   useEffect(() => {
-    void detectWebGpu().then(setGpu);
+    void inspectGpu().then(setGpu);
   }, []);
   // Which sections to narrate. A table of contents is meaningless read aloud,
   // so it starts excluded; everything else starts in.
@@ -175,6 +176,16 @@ export default function AudiobookPanel() {
     engine === 'kokoro'
       ? { voices: KOKORO_VOICES, model: 'Kokoro-82M', available: true }
       : catalogue;
+
+  // Said plainly, because it decides whether a book takes an hour or a night.
+  const gpuNote =
+    gpu === null
+      ? ''
+      : gpu.usable
+        ? ' Your graphics card is available, so narration runs fast.'
+        : gpu.reason === 'software'
+          ? ' Your browser reports WebGPU as software only, so this runs on the CPU — several times slower. Turning on graphics acceleration in your browser, or updating your graphics driver, would fix it.'
+          : ' No graphics acceleration here, so this runs on the CPU — several times slower, but it still works.';
 
   const handleFile = async (file: File) => {
     const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
@@ -554,7 +565,7 @@ export default function AudiobookPanel() {
               <p className="text-[10px] text-[#52525B] leading-relaxed w-full mt-1">
                 {engine === 'kokoro'
                   ? `Runs on this device. Free and unlimited, no key — the voice model downloads once and is then cached. It cannot be given a delivery instruction.${
-                      gpu === null ? '' : gpu ? ' Your GPU is available, so narration runs fast.' : ' No WebGPU here, so it falls back to the CPU and runs several times slower.'
+                      gpuNote
                     }`
                   : 'Runs on Google\u2019s servers. Takes a delivery instruction, but needs an API key and is limited by its quota.'}
               </p>
