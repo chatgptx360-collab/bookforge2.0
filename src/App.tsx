@@ -5,8 +5,9 @@ import ConverterPanel from './components/ConverterPanel';
 import ReaderEditorPanel from './components/ReaderEditorPanel';
 import AudiobookPanel from './components/AudiobookPanel';
 import TtsStudioPanel from './components/TtsStudioPanel';
+import AuditPanel from './components/AuditPanel';
 
-export type ViewId = 'converter' | 'reader' | 'audiobook' | 'speech';
+export type ViewId = 'converter' | 'reader' | 'audiobook' | 'speech' | 'check';
 
 const ROUTES: Record<string, ViewId> = {
   '/': 'converter',
@@ -14,6 +15,7 @@ const ROUTES: Record<string, ViewId> = {
   '/reader': 'reader',
   '/audiobook': 'audiobook',
   '/speech': 'speech',
+  '/check': 'check',
 };
 
 function viewFromPath(pathname: string): ViewId {
@@ -85,6 +87,8 @@ export default function App() {
           <AudiobookPanel />
         ) : activeView === 'speech' ? (
           <TtsStudioPanel />
+        ) : activeView === 'check' ? (
+          <AuditPanel />
         ) : (
           <ConverterPanel />
         )}

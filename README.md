@@ -126,6 +126,32 @@ State is per book — position, bookmarks, highlights and notes are keyed by
 title + author in `localStorage`, and the 25 most recent books are retained.
 Typography settings are global.
 
+## Manuscript Check
+
+A store rejected an export with a list of reasons — duplication, repetitive
+dialogue, formulaic writing, thin content — and most of those are measurable.
+This finds them before an upload does, at `/check` and as a badge on every
+conversion.
+
+Rule-based with no model behind it, deliberately. Running on every conversion
+only works if the same manuscript always gives the same answer; a checker that
+drifts teaches people to ignore it. Nothing needs a key, costs anything, or
+leaves the server.
+
+The findings split by what can honestly be done about them:
+
+- **Fixable automatically** — exact duplicate paragraphs, repeated chapter
+  headings, a typed table of contents. **Fix errors** deletes these and reports
+  what it removed. Nothing is rewritten, so the output is a subset of the input;
+  a test asserts every surviving line came from the original, in order.
+- **Needs your judgment** — repeated dialogue lines and openings, sentences that
+  start alike, stock phrasing, chapters far below the median length, narrow
+  vocabulary. These are counted and quoted rather than fixed, because the only
+  fix is new sentences and no button should rewrite someone's book.
+
+No score is shown. It would measure different things from the store's and a
+green number followed by another rejection is worse than no number at all.
+
 ## Speech
 
 Both speech views run on Gemini's TTS models through the same three routes, and

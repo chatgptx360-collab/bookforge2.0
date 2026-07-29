@@ -15,6 +15,10 @@ import AdmZip from 'adm-zip';
 import { GoogleGenAI } from '@google/genai';
 import { AlignmentType, Document, HeadingLevel, Packer, Paragraph, TextRun } from 'docx';
 import dotenv from 'dotenv';
+export { auditManuscript, applyMechanicalFixes } from './audit';
+export type { AuditReport, AuditFinding, AuditCategory } from './audit';
+
+import { auditManuscript as runAudit, applyMechanicalFixes as runFixes } from './audit';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import mammoth from 'mammoth';
 import multer from 'multer';
@@ -2170,6 +2174,45 @@ app.use(
   ['/api/book/convert', '/api/book/parse-file'],
   rateLimit('convert', Number(process.env.CONVERT_RATE_LIMIT ?? 120), 60 * 60 * 1000),
 );
+
+
+// ---------------------------------------------------------------------------
+// API — manuscript audit
+//
+// Rule-based and deterministic on purpose: it runs on every conversion, so the
+// same manuscript must always produce the same report. No key, no model, no
+// cost.
+// ---------------------------------------------------------------------------
+
+app.post('/api/book/audit', upload.single('file'), async (req, res) => {
+  try {
+    const inline = typeof req.body?.text === 'string' ? req.body.text : null;
+    const text = inline ?? (req.file ? await extractTextFromFile(req.file.buffer, req.file.originalname) : null);
+    if (!text || !text.trim()) {
+      res.status(400).json({ error: 'Send a file or a "text" field to audit.' });
+      return;
+    }
+    res.json(runAudit(text));
+  } catch (error) {
+    handleError(res, error, 'Failed to audit the manuscript');
+  }
+});
+
+/** Applies only the fixes that delete exact repetition; prose is never rewritten. */
+app.post('/api/book/fix', upload.single('file'), async (req, res) => {
+  try {
+    const inline = typeof req.body?.text === 'string' ? req.body.text : null;
+    const text = inline ?? (req.file ? await extractTextFromFile(req.file.buffer, req.file.originalname) : null);
+    if (!text || !text.trim()) {
+      res.status(400).json({ error: 'Send a file or a "text" field to fix.' });
+      return;
+    }
+    const fixed = runFixes(text);
+    res.json({ ...fixed, before: runAudit(text), after: runAudit(fixed.text) });
+  } catch (error) {
+    handleError(res, error, 'Failed to apply fixes');
+  }
+});
 
 // ---------------------------------------------------------------------------
 // API — health

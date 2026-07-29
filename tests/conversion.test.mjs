@@ -740,3 +740,111 @@ test('a book with no front matter is unchanged', () => {
   assert.match(text, /And ended the same way\./);
   assert.equal(validateEpubStructure(epub).valid, true);
 });
+
+// --- manuscript audit -------------------------------------------------------
+//
+// Built from a real rejection: "excessive duplication", "repetitive dialogue
+// patterns", "thin content". The checker runs on every conversion, so it has
+// to be deterministic and it has to not cry wolf.
+
+const REJECTED = [
+  'Chapter 1: The Signal', '',
+  'Thorne stared at the console while the hull groaned around him in the dark.', '',
+  '"Protocol seven requires immediate withdrawal, Commander."', '',
+  '"Shut up, VERNA."', '',
+  'Thorne stared at the console while the hull groaned around him in the dark.', '',
+  '"Protocol nine requires a full diagnostic, Commander."', '',
+  '"Shut up, VERNA."', '',
+  'Chapter 2: The Answer', '',
+  '"Protocol twelve requires evacuation, Commander."', '',
+  '"Shut up, VERNA."', '',
+  '"Protocol one requires silence, Commander."', '',
+  '"Shut up, VERNA."', '',
+  'The weight of it washed over him in that moment, a testament to unwavering dread.', '',
+].join('\n');
+
+test('the audit finds what the store found', async () => {
+  const { auditManuscript } = require('../server-build/server.cjs');
+  const report = auditManuscript(REJECTED);
+  const categories = report.findings.map((f) => f.category);
+
+  assert.ok(categories.includes('duplication'), 'the repeated paragraph was missed');
+  assert.ok(categories.includes('repetitive-dialogue'), 'the repeated dialogue was missed');
+  assert.ok(categories.includes('ai-tells'), 'the stock phrasing was missed');
+
+  const dialogue = report.findings.find((f) => f.category === 'repetitive-dialogue');
+  assert.match(dialogue.summary, /spoken 4 times/i, dialogue.summary);
+  assert.ok(dialogue.examples.length > 0, 'a finding must be checkable against the text');
+  assert.equal(dialogue.fixable, false, 'rewriting dialogue is not a mechanical fix');
+
+  const duplication = report.findings.find((f) => f.category === 'duplication');
+  assert.equal(duplication.fixable, true);
+});
+
+test('the audit is deterministic', async () => {
+  const { auditManuscript } = require('../server-build/server.cjs');
+  // A checker that drifts teaches people to ignore it.
+  const first = JSON.stringify(auditManuscript(REJECTED));
+  for (let run = 0; run < 5; run++) assert.equal(JSON.stringify(auditManuscript(REJECTED)), first);
+});
+
+test('clean prose is left alone', async () => {
+  const { auditManuscript } = require('../server-build/server.cjs');
+  const clean = [
+    'Chapter 1: Low Water', '',
+    'The tide had gone out further than Marin remembered, exposing ribs of black rock.', '',
+    '"You came back," her mother said, not turning from the window.', '',
+    'She had rehearsed an answer for eleven years and still had none ready.', '',
+    'Chapter 2: The Keeper', '',
+    'Salt had eaten the hinges to lace. Beyond the door, the stair climbed into dark.', '',
+    '"Nobody has been up there since your father," said the harbourmaster.', '',
+    'Marin counted the steps aloud, the way frightened people count anything.', '',
+  ].join('\n');
+
+  const report = auditManuscript(clean);
+  assert.deepEqual(report.findings, [], `false positives: ${report.findings.map((f) => f.summary).join(' | ')}`);
+  assert.equal(report.fixableCount, 0);
+});
+
+test('fixing removes repetition and nothing else', async () => {
+  const { applyMechanicalFixes, auditManuscript } = require('../server-build/server.cjs');
+  const source = [
+    'Ghost Signal', '',
+    'Table of Contents', 'Chapter 1: The Signal ..... 1', 'Chapter 2: The Answer ..... 20', '',
+    'Chapter 1: The Signal', '',
+    'Thorne stared at the console while the hull groaned around him in the dark.', '',
+    'Thorne stared at the console while the hull groaned around him in the dark.', '',
+    'Chapter 1: The Signal', '',
+    'A unique closing line that must survive.', '',
+  ].join('\n');
+
+  const { text, changes } = applyMechanicalFixes(source);
+
+  assert.ok(changes.length >= 2, changes.join(' | '));
+  assert.equal(text.split('Thorne stared at the console').length - 1, 1, 'the duplicate paragraph survived');
+  assert.equal(text.split('Chapter 1: The Signal').length - 1, 1, 'the repeated heading survived');
+  assert.ok(!text.includes('.....'), 'the typed contents survived');
+  assert.match(text, /A unique closing line that must survive\./);
+  assert.match(text, /Ghost Signal/);
+
+  // The fix must actually clear what it claimed, and add nothing.
+  assert.equal(auditManuscript(text).fixableCount, 0);
+  assert.ok(text.length < source.length);
+});
+
+test('fixing never invents or reorders text', async () => {
+  const { applyMechanicalFixes } = require('../server-build/server.cjs');
+  const source = 'Chapter 1: Alone\n\nFirst.\n\nSecond.\n\nThird.\n\nSecond.\n';
+  const { text } = applyMechanicalFixes(source);
+
+  // Short repeats like dialogue beats are legitimate and must be kept.
+  assert.equal(text.split('Second.').length - 1, 2, 'a short repeated line was wrongly removed');
+  // Whatever survives must appear in the original, in the same order.
+  const order = text.split('\n\n').map((p) => p.trim()).filter(Boolean);
+  let cursor = -1;
+  for (const piece of order) {
+    const at = source.indexOf(piece, cursor + 1);
+    assert.ok(at > cursor, `"${piece}" was reordered or invented`);
+    cursor = at;
+  }
+});

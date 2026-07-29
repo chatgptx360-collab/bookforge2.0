@@ -29,6 +29,8 @@ interface ConvertedFile {
   finalName: string;
   timestamp: string;
   epubValid: boolean | null;
+  /** Set once the quality check has run on the source manuscript. */
+  audit?: { total: number; fixable: number; worst: 'high' | 'medium' | 'low' | null };
   epubVersion: string | null;
 }
 
@@ -299,6 +301,31 @@ export default function ConverterPanel() {
           },
           ...prev,
         ]);
+
+        // The quality check runs on the source text, not the package, so it is
+        // the same answer whatever format was asked for. Failing it must never
+        // fail the conversion — the file is already made and downloadable.
+        void (async () => {
+          try {
+            const form = new FormData();
+            form.append('file', f);
+            const response = await fetch('/api/book/audit', { method: 'POST', body: form });
+            if (!response.ok) return;
+            const report = await response.json();
+            const worst = ['high', 'medium', 'low'].find((level) =>
+              report.findings.some((finding: { severity: string }) => finding.severity === level),
+            ) as 'high' | 'medium' | 'low' | undefined;
+            setConvertedHistory((prev) =>
+              prev.map((entry) =>
+                entry.downloadUrl === downloadUrl
+                  ? { ...entry, audit: { total: report.findings.length, fixable: report.fixableCount, worst: worst ?? null } }
+                  : entry,
+              ),
+            );
+          } catch {
+            /* the check is advisory; a conversion is not held up by it */
+          }
+        })();
         updateProgress(i, { status: 'done', percent: 100 });
 
         const link = document.createElement('a');
@@ -786,6 +813,32 @@ export default function ConverterPanel() {
                         <h4 className="text-xs font-medium text-[#E4E4E7] truncate mt-1.5 leading-snug">
                           {item.finalName}
                         </h4>
+                        {item.audit && (
+                          <a
+                            href="/check"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              window.history.pushState({ view: 'check' }, '', '/check');
+                              window.dispatchEvent(new PopStateEvent('popstate'));
+                            }}
+                            title={
+                              item.audit.total === 0
+                                ? 'No duplication or repetition found'
+                                : `${item.audit.total} quality issue${item.audit.total === 1 ? '' : 's'} — open Manuscript Check`
+                            }
+                            className={`inline-flex items-center gap-1 mt-1.5 mr-1.5 text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded border cursor-pointer ${
+                              item.audit.total === 0
+                                ? 'text-emerald-400 bg-emerald-950/30 border-emerald-500/25'
+                                : item.audit.worst === 'high'
+                                  ? 'text-red-400 bg-red-950/30 border-red-500/25'
+                                  : 'text-amber-400 bg-amber-950/30 border-amber-500/25'
+                            }`}
+                          >
+                            {item.audit.total === 0
+                              ? 'Quality OK'
+                              : `${item.audit.total} issue${item.audit.total === 1 ? '' : 's'}${item.audit.fixable ? ` · ${item.audit.fixable} fixable` : ''}`}
+                          </a>
+                        )}
                         {item.epubValid !== null && (
                           <span
                             className={`inline-flex items-center gap-1 mt-1.5 text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded border ${
