@@ -1622,6 +1622,41 @@ ${text}`;
   }
 });
 
+/** In-reader dictionary: define, explain or translate a selected passage. */
+app.post('/api/book/lookup', async (req, res) => {
+  try {
+    const { text, context, bookTitle, targetLanguage } = req.body ?? {};
+    if (!text || !String(text).trim()) {
+      res.status(400).json({ error: '"text" is required.' });
+      return;
+    }
+
+    const selection = String(text).slice(0, 400);
+    const isPhrase = selection.trim().split(/\s+/).length > 3;
+    const prompt = targetLanguage
+      ? `Translate this passage into ${targetLanguage}, then add one short line on any idiom or cultural reference a reader might miss.\n\nPASSAGE: "${selection}"\n${context ? `\nSURROUNDING TEXT: ${context}` : ''}`
+      : `A reader selected ${isPhrase ? 'this passage' : 'this word'} while reading${
+          bookTitle ? ` "${bookTitle}"` : ''
+        } and wants to understand it.
+
+SELECTION: "${selection}"
+${context ? `SURROUNDING TEXT: ${context}` : ''}
+
+Reply in at most 70 words, plain prose, no headings or bullet points:
+${
+  isPhrase
+    ? '- Explain what the passage means in this context, including any allusion or idiom.'
+    : '- Give the part of speech and a concise definition, then the sense being used here.'
+}
+Do not restate the selection or add commentary about the book as a whole.`;
+
+    const response = await generateContentWithRetry({ contents: prompt });
+    res.json({ term: selection, explanation: (response.text ?? '').trim() });
+  } catch (error) {
+    handleError(res, error, 'Failed to look up the selection');
+  }
+});
+
 app.post('/api/book/export-translated-docx', async (req, res) => {
   try {
     const { title, author, language, chapters } = req.body ?? {};

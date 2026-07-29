@@ -10,9 +10,11 @@ sections, and read it in a typeset reader.
   page, table of contents and chapters; four editor themes, three typefaces, font
   sizing, split-at-cursor, word/character counts; export to TXT, server DOCX, or a
   KDP-layout DOCX built entirely in the browser.
-- **Reader** — Georgia/Times serif prose, centred chapter headings, indented
-  paragraphs (flush after scene breaks), ❦ fleurons, light/dark toggle and scroll
-  bookmarks persisted in `localStorage`.
+- **Reader** — a full e-reader, not a scroll view: paginated spreads (two pages on
+  wide screens, one on mobile), four themes, four typefaces, size/spacing/margin
+  controls, table of contents with per-chapter time estimates, in-book search,
+  bookmarks, four-colour highlights with notes, read-aloud, immersive mode,
+  keyboard shortcuts, and resume-where-you-left-off. See **Reader** below.
 
 ## Stack
 
@@ -76,6 +78,7 @@ Mounted at `/api`, all `POST` unless noted.
 | `/api/book/export-docx` | Book project JSON | KDP-layout DOCX with front/back matter |
 | `/api/book/export-translated-docx` | `{ title, author, language, chapters[] }` | DOCX |
 | `/api/book/translate-chunk` | `{ text, targetLanguage }` | `{ translatedText }` |
+| `/api/book/lookup` | `{ text, context?, targetLanguage? }` | `{ explanation }` for the reader's lookup |
 | `/api/book/enhance-draft` | `{ text, instruction?, intensity? }` | `{ enhancedText }` |
 | `/api/book/analyze-discovery` | Concept answers | Development analysis |
 | `/api/book/generate-outline` | Project brief | Chapter-by-chapter blueprint |
@@ -86,6 +89,25 @@ Mounted at `/api`, all `POST` unless noted.
 | `/api/author-empire/analyze-cover` | multipart `image` or `{ imageBase64 }` | Cover audit |
 
 Uploads are capped at 25 MB; oversized files get a 413 with a readable message.
+
+## Reader
+
+The reader is the part users spend their time in, so it behaves like a commercial
+e-reader rather than a styled scroll container.
+
+| Area | What it does |
+| --- | --- |
+| Layout | CSS multi-column pagination with a clipping box sized to exactly one spread — two facing pages on wide screens, one on mobile. Switchable to continuous scrolling. |
+| Typography | Four typefaces, 14–30 px, five line-height and five margin presets, justified or ragged-right, drop caps, ❦ scene breaks |
+| Themes | Paper, Sepia, Night, Black (OLED) |
+| Navigation | Contents panel with per-chapter word counts and time estimates, in-book search with context snippets, page turns by key/click zone/footer arrows |
+| Annotations | Bookmarks and four-colour highlights with attached notes, listed in a side panel, click to jump |
+| Progress | Percent read, time left in chapter and in book (adjustable wpm), page X of Y, chapter ticks on the progress bar |
+| Extras | Read-aloud via the Web Speech API, immersive mode, dictionary/context lookup on any selection (needs an AI key), full keyboard control with a `?` shortcut sheet |
+
+State is per book — position, bookmarks, highlights and notes are keyed by
+title + author in `localStorage`, and the 25 most recent books are retained.
+Typography settings are global.
 
 ## Conversion notes
 
@@ -128,6 +150,8 @@ server-build/server.cjs    Built server bundle (git-ignored, never published)
 server.ts                  Express app: every API route + all conversion logic
 src/App.tsx                History-API router: converter | reader
 src/components/            Sidebar, ConverterPanel, ReaderEditorPanel, BookReader
+src/components/reader/     Pagination content, panels, themes, book model
+src/utils/readerStore.ts   Per-book position, bookmarks, highlights, settings
 src/utils/docxExporter.ts  Client-side KDP DOCX builder (lazy-loaded)
 tests/conversion.test.mjs  Round-trip and format-validity tests
 ```
