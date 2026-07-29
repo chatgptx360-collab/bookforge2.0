@@ -12,7 +12,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 
 import AdmZip from 'adm-zip';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 import { AlignmentType, Document, HeadingLevel, Packer, Paragraph, TextRun } from 'docx';
 import dotenv from 'dotenv';
 import express, { type NextFunction, type Request, type Response } from 'express';
@@ -42,7 +42,6 @@ const GEMINI_MODELS = (process.env.GEMINI_MODELS ?? 'gemini-2.5-flash,gemini-fla
   .split(',')
   .map((m) => m.trim())
   .filter(Boolean);
-const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL ?? 'imagen-4.0-generate-001';
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL ?? 'google/gemini-2.5-flash';
 
 let activeModelIndex = 0;
@@ -2097,33 +2096,15 @@ function rateLimit(name: string, max: number, windowMs: number) {
   };
 }
 
-const AI_ROUTES = [
-  '/api/book/analyze-discovery',
-  '/api/book/generate-outline',
-  '/api/book/generate-chapter',
-  '/api/book/translate-chunk',
-  '/api/book/enhance-draft',
-  '/api/book/lookup',
-  '/api/book/generate-cover',
-  '/api/author-empire/generate-titles',
-  '/api/author-empire/generate-blurb',
-  '/api/author-empire/analyze-cover',
-  '/api/translate/brief',
-  '/api/translate/segment',
-  '/api/translate/polish',
-];
+const AI_ROUTES = ['/api/book/lookup'];
 
 app.use(AI_ROUTES, rateLimit('ai', Number(process.env.AI_RATE_LIMIT ?? 40), 60 * 60 * 1000));
+// An audiobook is thousands of calls, so speech gets its own generous budget.
+app.use('/api/tts/speak', rateLimit('tts', Number(process.env.TTS_RATE_LIMIT ?? 4000), 60 * 60 * 1000));
 app.use(
-  ['/api/translate/segment', '/api/translate/polish'],
-  rateLimit('translate', Number(process.env.TRANSLATE_RATE_LIMIT ?? 1200), 60 * 60 * 1000),
-);
-app.use(
-  ['/api/book/convert', '/api/book/parse-file', '/api/translate/prepare', '/api/translate/export'],
+  ['/api/book/convert', '/api/book/parse-file'],
   rateLimit('convert', Number(process.env.CONVERT_RATE_LIMIT ?? 120), 60 * 60 * 1000),
 );
-// The image model is the most expensive call in the app.
-app.use('/api/book/generate-cover', rateLimit('cover', Number(process.env.COVER_RATE_LIMIT ?? 10), 60 * 60 * 1000));
 
 // ---------------------------------------------------------------------------
 // API — health
@@ -2137,7 +2118,8 @@ app.get('/api/health', (_req, res) => {
     ai: geminiClient ? 'gemini' : process.env.OPENROUTER_API_KEY ? 'openrouter' : 'disabled',
     // Non-null when a second provider is configured to take over on failure.
     fallback: geminiClient && process.env.OPENROUTER_API_KEY ? 'openrouter' : null,
-    imageGeneration: geminiClient ? 'available' : 'requires GEMINI_API_KEY',
+    // Speech is Gemini-only; OpenRouter has no equivalent audio modality.
+    speech: geminiClient ? TTS_MODEL : 'requires GEMINI_API_KEY',
   });
 });
 
@@ -2293,241 +2275,6 @@ app.post('/api/book/export-custom-docx', async (req, res) => {
 // API — AI writing tools
 // ---------------------------------------------------------------------------
 
-app.post('/api/book/analyze-discovery', async (req, res) => {
-  try {
-    const { title, genre, audience, tone, premise, pacing, answers } = req.body ?? {};
-    const prompt = `You are a premium literary development consultant preparing a book for publication.
-
-Book title: ${title || 'Untitled'}
-Genre: ${genre || 'unspecified'}
-Target audience: ${audience || 'general readers'}
-Tone: ${tone || 'unspecified'}
-Pacing: ${pacing || 'balanced'}
-Premise: ${premise || 'not provided'}
-
-Author's discovery answers:
-${JSON.stringify(answers ?? {}, null, 2)}
-
-Return a rigorous development analysis. Be concrete and specific to this premise — no generic advice.`;
-
-    const response = await generateContentWithRetry({
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            audienceStrategy: { type: Type.STRING },
-            structuralStyle: { type: Type.STRING },
-            thematicThreads: { type: Type.STRING },
-            milestones: { type: Type.ARRAY, items: { type: Type.STRING } },
-            architectAdvice: { type: Type.STRING },
-          },
-          required: ['audienceStrategy', 'structuralStyle', 'thematicThreads', 'milestones', 'architectAdvice'],
-        },
-      },
-    });
-    res.json(robustJsonParse(response.text ?? ''));
-  } catch (error) {
-    handleError(res, error, 'Failed to analyze the book concept');
-  }
-});
-
-app.post('/api/book/generate-outline', async (req, res) => {
-  try {
-    const {
-      title,
-      subtitle,
-      genre,
-      audience,
-      tone,
-      premise,
-      pacing,
-      authorPersona,
-      targetChapterCount,
-      targetWordCount,
-      discoveryAnalysis,
-      customChaptersInput,
-    } = req.body ?? {};
-
-    const chapterCount = Number(targetChapterCount) > 0 ? Number(targetChapterCount) : 12;
-    const prompt = `You are a bestselling book architect. Produce a chapter-by-chapter blueprint.
-
-Title: ${title || 'Untitled'}${subtitle ? ` — ${subtitle}` : ''}
-Genre: ${genre || 'unspecified'} | Audience: ${audience || 'general'} | Tone: ${tone || 'unspecified'} | Pacing: ${pacing || 'balanced'}
-Author voice: ${authorPersona || 'versatile professional'}
-Premise: ${premise || 'not provided'}
-Target: ${chapterCount} chapters, roughly ${Number(targetWordCount) || 50000} words total.
-${discoveryAnalysis ? `Development analysis: ${JSON.stringify(discoveryAnalysis)}` : ''}
-${customChaptersInput ? `The author insists on these chapter ideas: ${customChaptersInput}` : ''}
-
-Rules:
-- Exactly ${chapterCount} chapters, numbered from 1.
-- Each chapter needs a distinct dramatic or instructional function; no repetition.
-- estimatedWordCount values should sum to roughly the target word count.`;
-
-    const response = await generateContentWithRetry({
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            suggestedBookTitle: { type: Type.STRING },
-            suggestedSubTitle: { type: Type.STRING },
-            chaptersSettingFocus: { type: Type.STRING },
-            chapters: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  chapterNumber: { type: Type.INTEGER },
-                  title: { type: Type.STRING },
-                  focus: { type: Type.STRING },
-                  subsections: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  emotionalArcOrKeyLesson: { type: Type.STRING },
-                  estimatedWordCount: { type: Type.INTEGER },
-                },
-                required: ['chapterNumber', 'title', 'focus', 'subsections', 'emotionalArcOrKeyLesson', 'estimatedWordCount'],
-              },
-            },
-          },
-          required: ['suggestedBookTitle', 'suggestedSubTitle', 'chaptersSettingFocus', 'chapters'],
-        },
-      },
-    });
-    res.json(robustJsonParse(response.text ?? ''));
-  } catch (error) {
-    handleError(res, error, 'Failed to generate the outline');
-  }
-});
-
-app.post('/api/book/generate-chapter', async (req, res) => {
-  try {
-    const { bookTitle, genre, tone, authorPersona, chapterOutline, previousSummary, targetWordCount } = req.body ?? {};
-    if (!chapterOutline) {
-      res.status(400).json({ error: 'chapterOutline is required.' });
-      return;
-    }
-
-    const words = Number(targetWordCount) || Number(chapterOutline?.estimatedWordCount) || 2500;
-    const prompt = `Write chapter ${chapterOutline.chapterNumber} of "${bookTitle || 'Untitled'}".
-
-Genre: ${genre || 'unspecified'} | Tone: ${tone || 'unspecified'}
-Author voice to emulate: ${authorPersona || 'clear, confident professional prose'}
-Chapter title: ${chapterOutline.title}
-Focus: ${chapterOutline.focus}
-Sub-beats: ${(chapterOutline.subsections ?? []).join(' | ')}
-Emotional arc / key lesson: ${chapterOutline.emotionalArcOrKeyLesson}
-${previousSummary ? `What happened previously: ${previousSummary}` : ''}
-
-Requirements:
-- Approximately ${words} words of finished prose.
-- Do not restate the chapter number or title as a heading; start with the prose itself.
-- Use "***" on its own line for scene breaks.
-- No meta-commentary, no placeholders, no bullet summaries.`;
-
-    const response = await generateContentWithRetry({
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            chapterText: { type: Type.STRING },
-            actualWordCount: { type: Type.INTEGER },
-            statusIntermission: {
-              type: Type.OBJECT,
-              properties: {
-                progressSummary: { type: Type.STRING },
-                narrativeSummary: { type: Type.STRING },
-                nextUpTeaser: { type: Type.STRING },
-              },
-              required: ['progressSummary', 'narrativeSummary', 'nextUpTeaser'],
-            },
-          },
-          required: ['chapterText', 'actualWordCount', 'statusIntermission'],
-        },
-      },
-    });
-
-    const parsed = robustJsonParse(response.text ?? '');
-    const chapterText = String(parsed.chapterText ?? '');
-    res.json({
-      ...parsed,
-      chapterText,
-      actualWordCount: chapterText.split(/\s+/).filter(Boolean).length,
-    });
-  } catch (error) {
-    handleError(res, error, 'Failed to generate the chapter');
-  }
-});
-
-app.post('/api/book/translate-chunk', async (req, res) => {
-  try {
-    const { text, targetLanguage, sourceLanguage, preserveFormatting = true } = req.body ?? {};
-    if (!text || !targetLanguage) {
-      res.status(400).json({ error: 'Both "text" and "targetLanguage" are required.' });
-      return;
-    }
-
-    const prompt = `Translate the following book passage into ${targetLanguage}${
-      sourceLanguage ? ` from ${sourceLanguage}` : ''
-    }.
-
-Rules:
-- Preserve the literary register, rhythm and voice of the original.
-- ${preserveFormatting ? 'Keep paragraph breaks, scene breaks ("***") and headings exactly as they appear.' : 'Return clean prose.'}
-- Translate idioms into their natural equivalent rather than word-for-word.
-- Output ONLY the translated text, with no preamble or commentary.
-
-PASSAGE:
-${text}`;
-
-    const response = await generateContentWithRetry({ contents: prompt });
-    const translatedText = (response.text ?? '').trim();
-    res.json({ translatedText, targetLanguage, characterCount: translatedText.length });
-  } catch (error) {
-    handleError(res, error, 'Failed to translate the passage');
-  }
-});
-
-app.post('/api/book/enhance-draft', async (req, res) => {
-  try {
-    const { text, instruction, tone, intensity = 'balanced' } = req.body ?? {};
-    if (!text) {
-      res.status(400).json({ error: '"text" is required.' });
-      return;
-    }
-
-    const prompt = `You are a senior line editor polishing a book draft.
-
-Editing intensity: ${intensity} (light = fix mechanics only; balanced = tighten prose; heavy = rewrite for impact)
-${tone ? `Target tone: ${tone}` : ''}
-${instruction ? `Author's instruction: ${instruction}` : ''}
-
-Rules:
-- Preserve the author's meaning, facts, names and structure.
-- Keep paragraph breaks and scene breaks intact.
-- Remove filler, fix rhythm, strengthen verbs, cut clichés.
-- Output ONLY the edited prose.
-
-DRAFT:
-${text}`;
-
-    const response = await generateContentWithRetry({ contents: prompt });
-    const enhancedText = (response.text ?? '').trim();
-    res.json({
-      enhancedText,
-      originalWordCount: String(text).split(/\s+/).filter(Boolean).length,
-      enhancedWordCount: enhancedText.split(/\s+/).filter(Boolean).length,
-    });
-  } catch (error) {
-    handleError(res, error, 'Failed to enhance the draft');
-  }
-});
-
-/** In-reader dictionary: define, explain or translate a selected passage. */
 app.post('/api/book/lookup', async (req, res) => {
   try {
     const { text, context, bookTitle, targetLanguage } = req.body ?? {};
@@ -2559,30 +2306,6 @@ Do not restate the selection or add commentary about the book as a whole.`;
     res.json({ term: selection, explanation: (response.text ?? '').trim() });
   } catch (error) {
     handleError(res, error, 'Failed to look up the selection');
-  }
-});
-
-app.post('/api/book/export-translated-docx', async (req, res) => {
-  try {
-    const { title, author, language, chapters } = req.body ?? {};
-    if (!Array.isArray(chapters) || chapters.length === 0) {
-      res.status(400).json({ error: 'At least one translated chapter is required.' });
-      return;
-    }
-    const docTitle = String(title || 'Translated Manuscript');
-    const buffer = await buildManuscriptDocx({
-      title: docTitle,
-      subtitle: language ? `${language} edition` : undefined,
-      author: author ? String(author) : undefined,
-      chapters: chapters.map((chapter: { title?: string; translatedText?: string; text?: string }) => ({
-        title: String(chapter.title ?? 'Untitled Section'),
-        text: String(chapter.translatedText ?? chapter.text ?? ''),
-      })),
-    });
-    const suffix = language ? `_${String(language).replace(/\s+/g, '_')}` : '_translated';
-    sendDocument(res, buffer, `${docTitle.trim().replace(/\s+/g, '_')}${suffix}.docx`, 'docx');
-  } catch (error) {
-    handleError(res, error, 'Failed to export the translated DOCX');
   }
 });
 
@@ -2666,745 +2389,184 @@ app.post('/api/book/export-docx', async (req, res) => {
   }
 });
 
-app.post('/api/book/generate-cover', async (req, res) => {
-  try {
-    const { title, subtitle, genre, mood, styleHint, author, aspectRatio = '3:4' } = req.body ?? {};
-    if (!geminiClient) throw new AiUnavailableError();
-
-    const prompt = `Design a professional, commercially viable book cover illustration.
-
-Title: ${title || 'Untitled'}${subtitle ? ` — ${subtitle}` : ''}
-Author: ${author || 'unknown'}
-Genre: ${genre || 'general fiction'}
-Mood: ${mood || 'evocative and premium'}
-Art direction: ${styleHint || 'modern trade-paperback aesthetic, strong focal subject, high contrast, cinematic lighting'}
-
-Composition: leave clean negative space in the upper third for the title treatment and the lower fifth for the author name. No text, no lettering, no watermarks in the image.`;
-
-    const response = await geminiClient.models.generateImages({
-      model: IMAGE_MODEL,
-      prompt,
-      config: { numberOfImages: 1, aspectRatio, outputMimeType: 'image/png' },
-    });
-
-    const image = response.generatedImages?.[0]?.image;
-    if (!image?.imageBytes) {
-      res.status(502).json({ error: 'The image model returned no cover. Try a different prompt or mood.' });
-      return;
-    }
-    const mimeType = image.mimeType ?? 'image/png';
-    res.json({ mimeType, imageUrl: `data:${mimeType};base64,${image.imageBytes}`, prompt });
-  } catch (error) {
-    handleError(res, error, 'Failed to generate the cover');
-  }
-});
-
 // ---------------------------------------------------------------------------
-// Manuscript translation
+// Text to speech
 //
-// Book-length translation fails in predictable ways: voice drifts between
-// chunks, character and place names change spelling halfway through, emphasis
-// and structure are flattened, and the prose reads like a translation. The
-// pipeline below is built around those four failures.
+// Gemini's TTS models return raw PCM, one call at a time, with a bounded
+// context. Whole books therefore have to be spoken in pieces and stitched
+// together, which the client does so that neither the function timeout nor the
+// response size becomes the limit.
 // ---------------------------------------------------------------------------
 
-export interface GlossaryEntry {
-  source: string;
-  target: string;
-  note?: string;
-  /** Proper nouns and invented terms that must survive untranslated. */
-  keepAsIs?: boolean;
+export interface TtsVoice {
+  name: string;
+  character: string;
+  /** A rough guide for pickers: warm narrators vs bright, energetic reads. */
+  timbre: 'warm' | 'bright' | 'deep' | 'clear';
+  goodFor: string;
 }
 
-export interface TranslationBrief {
-  detectedSourceLanguage: string;
-  genre: string;
-  narrativeVoice: string;
-  register: string;
-  tense: string;
-  formality: string;
-  rhythmNotes: string;
-  culturalNotes: string;
-  translatorGuidance: string;
-  glossary: GlossaryEntry[];
-}
+/** The prebuilt voices the Gemini speech models expose. */
+export const TTS_VOICES: TtsVoice[] = [
+  { name: 'Achernar', character: 'Soft', timbre: 'warm', goodFor: 'Intimate first-person narration' },
+  { name: 'Achird', character: 'Friendly', timbre: 'warm', goodFor: 'Memoir and warm non-fiction' },
+  { name: 'Algenib', character: 'Gravelly', timbre: 'deep', goodFor: 'Noir, grit, hard-boiled voices' },
+  { name: 'Algieba', character: 'Smooth', timbre: 'warm', goodFor: 'Literary fiction, long listening' },
+  { name: 'Alnilam', character: 'Firm', timbre: 'clear', goodFor: 'Business and instructional books' },
+  { name: 'Aoede', character: 'Breezy', timbre: 'bright', goodFor: 'Light comedy, YA' },
+  { name: 'Autonoe', character: 'Bright', timbre: 'bright', goodFor: 'Upbeat non-fiction' },
+  { name: 'Callirrhoe', character: 'Easy-going', timbre: 'warm', goodFor: 'Conversational narration' },
+  { name: 'Charon', character: 'Informative', timbre: 'clear', goodFor: 'Documentary and reference' },
+  { name: 'Despina', character: 'Smooth', timbre: 'warm', goodFor: 'Romance and drama' },
+  { name: 'Enceladus', character: 'Breathy', timbre: 'warm', goodFor: 'Quiet, interior passages' },
+  { name: 'Erinome', character: 'Clear', timbre: 'clear', goodFor: 'Technical material' },
+  { name: 'Fenrir', character: 'Excitable', timbre: 'bright', goodFor: 'Adventure, high energy' },
+  { name: 'Gacrux', character: 'Mature', timbre: 'deep', goodFor: 'Historical and literary fiction' },
+  { name: 'Iapetus', character: 'Clear', timbre: 'clear', goodFor: 'General narration' },
+  { name: 'Kore', character: 'Firm', timbre: 'clear', goodFor: 'Confident, steady narration' },
+  { name: 'Laomedeia', character: 'Upbeat', timbre: 'bright', goodFor: 'Self-help and motivation' },
+  { name: 'Leda', character: 'Youthful', timbre: 'bright', goodFor: 'Young adult narrators' },
+  { name: 'Orus', character: 'Firm', timbre: 'deep', goodFor: 'Thrillers and authority' },
+  { name: 'Puck', character: 'Upbeat', timbre: 'bright', goodFor: 'Humour and banter' },
+  { name: 'Pulcherrima', character: 'Forward', timbre: 'bright', goodFor: 'Persuasive non-fiction' },
+  { name: 'Rasalgethi', character: 'Informative', timbre: 'clear', goodFor: 'Essays and journalism' },
+  { name: 'Sadachbia', character: 'Lively', timbre: 'bright', goodFor: 'Children and family books' },
+  { name: 'Sadaltager', character: 'Knowledgeable', timbre: 'clear', goodFor: 'Academic and explanatory' },
+  { name: 'Schedar', character: 'Even', timbre: 'clear', goodFor: 'Long-form, low fatigue' },
+  { name: 'Sulafat', character: 'Warm', timbre: 'warm', goodFor: 'Classic audiobook narration' },
+  { name: 'Umbriel', character: 'Easy-going', timbre: 'warm', goodFor: 'Relaxed storytelling' },
+  { name: 'Vindemiatrix', character: 'Gentle', timbre: 'warm', goodFor: 'Poetry and reflection' },
+  { name: 'Zephyr', character: 'Bright', timbre: 'bright', goodFor: 'Energetic openings' },
+  { name: 'Zubenelgenubi', character: 'Casual', timbre: 'clear', goodFor: 'Podcast-style delivery' },
+];
 
-export interface TranslationSegment {
-  index: number;
-  label: string;
-  startBlock: number;
-  endBlock: number;
-  words: number;
-}
+const TTS_MODEL = process.env.GEMINI_TTS_MODEL ?? 'gemini-2.5-flash-preview-tts';
+const TTS_MAX_CHARS = 4500;
 
-/** Typographic conventions a published book in each language is expected to follow. */
-const TYPOGRAPHY_RULES: Record<string, string> = {
-  spanish:
-    'Use « » or em dashes for dialogue as the target market expects (Latin American editions normally use em dashes), open questions and exclamations with ¿ and ¡, and never carry over English quotation marks.',
-  french:
-    'Use guillemets « » for dialogue with a non-breaking space inside them, em dashes for turns of speech, and a narrow non-breaking space before ; : ! and ?.',
-  german:
-    'Use „low-high" quotation marks, capitalise all nouns, and respect German compound formation rather than splitting into English-style noun phrases.',
-  italian:
-    'Use « » or em dashes for dialogue as the edition requires, and avoid the English habit of possessive apostrophes.',
-  portuguese: 'Use em dashes to open lines of dialogue and « » where the edition calls for quotation.',
-  japanese:
-    'Use 「」 for speech, no spaces between words, 、and 。for punctuation, and choose a consistent politeness level per speaker.',
-  korean: 'Use “ ” or 「」 as the edition requires and keep speech levels consistent per character relationship.',
-  chinese: 'Use “ ” and full-width punctuation throughout, with no spaces between characters.',
-  arabic:
-    'Use Arabic punctuation (، ؛ ؟), right-to-left ordering, and choose a consistent register between Modern Standard and the target dialect.',
-  russian: 'Use « » for quotation and em dashes to open dialogue, following Russian punctuation rules.',
-  polish: 'Use „low-high" quotation marks and em dashes for dialogue.',
-  dutch: 'Use ‘ ’ or “ ” per house style and avoid English compound spacing.',
-  hindi: 'Use Devanagari punctuation conventions, including the danda where appropriate.',
-  swahili: 'Prefer natural Swahili idiom over calques from English, and keep noun-class agreement consistent.',
-  yoruba: 'Use correct tone marks and diacritics throughout; they are not optional for a published book.',
-};
+/** Splits text on sentence boundaries so no synthesis request is cut mid-thought. */
+export function planSpeechChunks(text: string, maxChars = 2400): string[] {
+  const paragraphs = text
+    .replace(/\r\n?/g, '\n')
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
 
-function typographyFor(language: string): string {
-  const key = Object.keys(TYPOGRAPHY_RULES).find((name) => language.toLowerCase().includes(name));
-  return key
-    ? TYPOGRAPHY_RULES[key]
-    : 'Follow the punctuation and quotation conventions a published book in this language uses, not the source language conventions.';
-}
+  const chunks: string[] = [];
+  let current = '';
 
-const RUN_OPEN_BOLD = '<b>';
-const RUN_CLOSE_BOLD = '</b>';
-const RUN_OPEN_ITALIC = '<i>';
-const RUN_CLOSE_ITALIC = '</i>';
-
-/**
- * Serialises blocks into numbered, tagged lines. The model only ever returns
- * text for these lines, so block types, ordering and document structure come
- * from our side and cannot be hallucinated away.
- */
-export function serializeBlocksForTranslation(blocks: RichBlock[], startIndex = 0): string {
-  return blocks
-    .map((block, offset) => {
-      const id = startIndex + offset + 1;
-      if (block.type === 'scene') return `[${id}|scene]`;
-      const body = block.runs
-        .map((run) => {
-          let text = run.text;
-          if (run.italic) text = `${RUN_OPEN_ITALIC}${text}${RUN_CLOSE_ITALIC}`;
-          if (run.bold) text = `${RUN_OPEN_BOLD}${text}${RUN_CLOSE_BOLD}`;
-          return text;
-        })
-        .join('');
-      const kind = block.type === 'heading' ? `h${block.level ?? 1}` : block.type === 'quote' ? 'quote' : block.type === 'listItem' ? 'li' : 'p';
-      return `[${id}|${kind}] ${body}`;
-    })
-    .join('\n');
-}
-
-function parseTaggedRuns(text: string): RichRun[] {
-  // Models are inconsistent about emphasis: <b>, <B>, < b >, or markdown.
-  // Normalise everything to lowercase tags before parsing so nothing is lost.
-  let normalized = text
-    .replace(/<\s*(b|strong)\s*>/gi, '<b>')
-    .replace(/<\s*\/\s*(b|strong)\s*>/gi, '</b>')
-    .replace(/<\s*(i|em)\s*>/gi, '<i>')
-    .replace(/<\s*\/\s*(i|em)\s*>/gi, '</i>');
-
-  if (!/<[bi]>/.test(normalized)) {
-    normalized = normalized
-      .replace(/\*\*\*(.+?)\*\*\*/g, '<b><i>$1</i></b>')
-      .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
-      .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<i>$2</i>');
-  }
-
-  // Drop an unmatched trailing opener rather than swallowing the rest of the line.
-  for (const tag of ['b', 'i'] as const) {
-    const opens = (normalized.match(new RegExp(`<${tag}>`, 'g')) ?? []).length;
-    const closes = (normalized.match(new RegExp(`</${tag}>`, 'g')) ?? []).length;
-    if (opens > closes) normalized += `</${tag}>`.repeat(opens - closes);
-    if (closes > opens) normalized = normalized.replace(new RegExp(`</${tag}>`), '');
-  }
-
-  const runs: RichRun[] = [];
-  const pattern = /<(b|i)>([\s\S]*?)<\/\1>|([^<]+)|(<[^>]*>)/g;
-  let match: RegExpExecArray | null;
-
-  while ((match = pattern.exec(normalized)) !== null) {
-    if (match[4] !== undefined) continue; // stray tag we do not understand
-    if (match[3] !== undefined) {
-      if (match[3]) runs.push({ text: match[3] });
-      continue;
-    }
-    const inner = match[2] ?? '';
-    if (!inner) continue;
-    const nested = /<[bi]>/.test(inner);
-    runs.push({
-      text: inner.replace(/<\/?[bi]>/g, ''),
-      bold: match[1] === 'b' || nested,
-      italic: match[1] === 'i' || nested,
-    });
-  }
-
-  return runs.length > 0 ? runs : [{ text: normalized.replace(/<\/?[bi]>/g, '') }];
-}
-
-export interface ParsedTranslation {
-  blocks: RichBlock[];
-  /** Blocks the model dropped; the source text is kept so nothing is silently lost. */
-  missing: number[];
-}
-
-/**
- * Rebuilds blocks from the model's numbered lines. Block type and order are
- * taken from the originals, so a malformed response degrades to "this
- * paragraph was not translated" rather than a corrupted manuscript.
- */
-export function parseTranslatedBlocks(response: string, originals: RichBlock[], startIndex = 0): ParsedTranslation {
-  const byId = new Map<number, string>();
-  const linePattern = /^\s*\[(\d+)\|[^\]]*\]\s?([\s\S]*?)$/;
-
-  for (const rawLine of response.replace(/\r\n?/g, '\n').split('\n')) {
-    const match = rawLine.match(linePattern);
-    if (!match) continue;
-    const id = Number.parseInt(match[1], 10);
-    const existing = byId.get(id);
-    byId.set(id, existing ? `${existing} ${match[2].trim()}` : match[2].trim());
-  }
-
-  const missing: number[] = [];
-  const blocks = originals.map((original, offset) => {
-    const id = startIndex + offset + 1;
-    if (original.type === 'scene') return original;
-
-    const translated = byId.get(id);
-    if (translated === undefined || translated === '') {
-      missing.push(id);
-      return original;
-    }
-    return original.level === undefined
-      ? { type: original.type, runs: parseTaggedRuns(translated) }
-      : { type: original.type, level: original.level, runs: parseTaggedRuns(translated) };
-  });
-
-  return { blocks, missing };
-}
-
-/**
- * Groups blocks into translation segments that never split a paragraph and
- * prefer to break at chapter headings, so each request carries a coherent
- * piece of prose rather than an arbitrary window.
- */
-export function planTranslationSegments(blocks: RichBlock[], targetWords = 800): TranslationSegment[] {
-  const segments: TranslationSegment[] = [];
-  let start = 0;
-  let words = 0;
-  let label = 'Opening';
-
-  const push = (end: number) => {
-    if (end < start) return;
-    segments.push({ index: segments.length, label, startBlock: start, endBlock: end, words });
-    start = end + 1;
-    words = 0;
+  const flush = () => {
+    if (current.trim()) chunks.push(current.trim());
+    current = '';
   };
 
-  blocks.forEach((block, index) => {
-    const isChapterStart = block.type === 'heading' && (block.level ?? 1) <= 1;
-    if (isChapterStart && index > start) {
-      push(index - 1);
-      label = blockText(block).slice(0, 60) || `Section ${segments.length + 1}`;
-    } else if (isChapterStart) {
-      label = blockText(block).slice(0, 60) || label;
+  for (const paragraph of paragraphs) {
+    if (`${current}\n\n${paragraph}`.length <= maxChars) {
+      current = current ? `${current}\n\n${paragraph}` : paragraph;
+      continue;
     }
+    flush();
 
-    words += blockText(block).split(/\s+/).filter(Boolean).length;
-
-    if (words >= targetWords && index >= start) {
-      push(index);
-      label = `${label} (cont.)`;
+    if (paragraph.length <= maxChars) {
+      current = paragraph;
+      continue;
     }
+    // A single oversized paragraph: break it at sentence ends.
+    const sentences = paragraph.match(/[^.!?…]+(?:[.!?…]+["'”’»)\]]*|$)/g) ?? [paragraph];
+    for (const sentence of sentences) {
+      if (`${current} ${sentence}`.trim().length > maxChars) flush();
+      current = current ? `${current} ${sentence.trim()}` : sentence.trim();
+    }
+    flush();
+  }
+  flush();
+
+  return chunks.length > 0 ? chunks : [text.trim()].filter(Boolean);
+}
+
+interface SpeechPart {
+  inlineData?: { data?: string; mimeType?: string };
+}
+
+/** Synthesises one passage and returns raw PCM plus the format the model used. */
+async function synthesize(
+  text: string,
+  voiceName: string,
+  style?: string,
+): Promise<{ audioBase64: string; mimeType: string; sampleRate: number }> {
+  if (!geminiClient) throw new AiUnavailableError();
+
+  // Style is expressed as an instruction to the model, which is how these
+  // models take direction; the instruction itself is never spoken.
+  const prompt = style?.trim() ? `${style.trim()}:\n\n${text}` : text;
+
+  const response = await geminiClient.models.generateContent({
+    model: TTS_MODEL,
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    config: {
+      responseModalities: ['AUDIO'],
+      speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
+    },
+  } as never);
+
+  const parts = (response.candidates?.[0]?.content?.parts ?? []) as SpeechPart[];
+  const audio = parts.find((part) => part.inlineData?.data);
+  if (!audio?.inlineData?.data) {
+    throw new Error('The speech model returned no audio for this passage.');
+  }
+
+  const mimeType = audio.inlineData.mimeType ?? 'audio/L16;codec=pcm;rate=24000';
+  const sampleRate = Number(mimeType.match(/rate=(\d+)/)?.[1] ?? 24000);
+  return { audioBase64: audio.inlineData.data, mimeType, sampleRate };
+}
+
+app.get('/api/tts/voices', (_req, res) => {
+  res.json({
+    voices: TTS_VOICES,
+    model: TTS_MODEL,
+    available: Boolean(geminiClient),
+    // The client stitches PCM and encodes the file, so it needs the format.
+    format: { encoding: 'pcm_s16le', sampleRate: 24000, channels: 1 },
   });
-
-  if (start < blocks.length) push(blocks.length - 1);
-  return segments.filter((segment) => segment.endBlock >= segment.startBlock);
-}
-
-function glossaryTable(glossary: GlossaryEntry[]): string {
-  if (!glossary || glossary.length === 0) return 'None supplied.';
-  return glossary
-    .slice(0, 400)
-    .map((entry) =>
-      entry.keepAsIs
-        ? `- "${entry.source}" → keep exactly as "${entry.source}" (do not translate)${entry.note ? ` — ${entry.note}` : ''}`
-        : `- "${entry.source}" → always "${entry.target}"${entry.note ? ` — ${entry.note}` : ''}`,
-    )
-    .join('\n');
-}
-
-function briefSummary(brief: Partial<TranslationBrief> | undefined): string {
-  if (!brief) return 'No brief supplied — infer the voice from the passage itself.';
-  return [
-    brief.genre ? `Genre: ${brief.genre}` : '',
-    brief.narrativeVoice ? `Narrative voice: ${brief.narrativeVoice}` : '',
-    brief.register ? `Register: ${brief.register}` : '',
-    brief.tense ? `Tense and person: ${brief.tense}` : '',
-    brief.formality ? `Formality to use with the reader and between characters: ${brief.formality}` : '',
-    brief.rhythmNotes ? `Rhythm and sentence shape: ${brief.rhythmNotes}` : '',
-    brief.culturalNotes ? `Cultural handling: ${brief.culturalNotes}` : '',
-    brief.translatorGuidance ? `Author-specific guidance: ${brief.translatorGuidance}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
-// --- routes ----------------------------------------------------------------
-
-/** Reads a manuscript and returns the structure a translation job runs on. */
-app.post('/api/translate/prepare', upload.single('file'), async (req, res) => {
-  const file = requireFile(req, res);
-  if (!file) return;
-  try {
-    const blocks = await extractBlocksFromFile(file.buffer, file.originalname);
-    if (blocks.length === 0) {
-      res.status(422).json({ error: 'No readable text was found in this file.' });
-      return;
-    }
-    const segments = planTranslationSegments(blocks, Number(req.body?.segmentWords) || 800);
-    const text = blocksToPlainText(blocks);
-    const structure = parseDocumentStructure(text);
-
-    res.json({
-      title:
-        structure.title && structure.title !== 'Untitled Manuscript'
-          ? structure.title
-          : baseNameOf(file.originalname),
-      author: structure.author || '',
-      blocks,
-      segments,
-      wordCount: text.split(/\s+/).filter(Boolean).length,
-      sourceFormat: formatFromName(file.originalname),
-    });
-  } catch (error) {
-    handleError(res, error, 'Failed to prepare the manuscript for translation');
-  }
 });
 
-/**
- * Reads samples from across the book and produces the brief every later
- * request is bound by: voice, register, formality, and the glossary that stops
- * names and invented terms drifting between chapters.
- */
-app.post('/api/translate/brief', async (req, res) => {
+/** Splits a passage the way it will be spoken, without synthesising anything. */
+app.post('/api/tts/plan', (req, res) => {
+  const { text, maxChars } = req.body ?? {};
+  if (!text || !String(text).trim()) {
+    res.status(400).json({ error: '"text" is required.' });
+    return;
+  }
+  const chunks = planSpeechChunks(String(text), Number(maxChars) || 2400);
+  res.json({
+    chunks,
+    characters: String(text).length,
+    // Roughly 14 characters a second at a natural narration pace.
+    estimatedSeconds: Math.round(String(text).length / 14),
+  });
+});
+
+app.post('/api/tts/speak', async (req, res) => {
   try {
-    const { blocks, targetLanguage, title, author, authorNotes } = req.body ?? {};
-    if (!Array.isArray(blocks) || blocks.length === 0 || !targetLanguage) {
-      res.status(400).json({ error: '"blocks" and "targetLanguage" are required.' });
+    const { text, voice = 'Sulafat', style } = req.body ?? {};
+    if (!text || !String(text).trim()) {
+      res.status(400).json({ error: '"text" is required.' });
+      return;
+    }
+    if (String(text).length > TTS_MAX_CHARS) {
+      res.status(413).json({
+        error: `Passage is too long for one request (${String(text).length} characters, limit ${TTS_MAX_CHARS}). Split it first.`,
+      });
+      return;
+    }
+    if (!TTS_VOICES.some((entry) => entry.name === voice)) {
+      res.status(400).json({ error: `Unknown voice "${voice}".` });
       return;
     }
 
-    // Sample the opening, three points through the body, and the closing, so
-    // the brief reflects the whole book rather than only its first pages.
-    const typed = blocks as RichBlock[];
-    const picks = [0, 0.2, 0.45, 0.7, 0.92].map((ratio) => Math.floor(typed.length * ratio));
-    const sample = picks
-      .map((at) => typed.slice(at, at + 14).map((block) => blockText(block)).filter(Boolean).join('\n\n'))
-      .filter(Boolean)
-      .join('\n\n[...]\n\n')
-      .slice(0, 14000);
-
-    const prompt = `You are a senior literary translator preparing to translate an entire book into ${targetLanguage}. Before translating a word, you write a translation brief.
-
-BOOK: ${title || 'Untitled'}${author ? ` by ${author}` : ''}
-${authorNotes ? `AUTHOR'S INSTRUCTIONS: ${authorNotes}` : ''}
-
-SAMPLES FROM THROUGHOUT THE MANUSCRIPT:
-${sample}
-
-Produce the brief. Requirements:
-- Identify the source language, the genre, and the narrative voice precisely enough that another translator could match it.
-- State the register (how formal, how contemporary, how ornate) and the tense/person.
-- Decide the formality convention to use in ${targetLanguage} — for example tú vs usted, tu vs vous, plain vs polite forms — and say when each applies between characters. Be decisive; the whole book will follow this.
-- Describe the rhythm: sentence length variation, paragraph shape, how dialogue sounds.
-- Say how to handle culturally specific material: measurements, foods, songs, institutions, jokes, wordplay. Prefer solutions a reader in the target culture understands without footnotes.
-- Build a glossary of every proper noun, invented term, honorific and repeated distinctive phrase you can see, with the exact form to use in ${targetLanguage} every time it appears. Mark keepAsIs true for names that must not be translated. This glossary is what keeps a 300-page translation consistent, so be thorough.
-- translatorGuidance: the two or three things a translator of this specific book most needs to get right.
-
-Write the brief in English. Glossary targets must be in ${targetLanguage}.`;
-
-    const response = await generateContentWithRetry({
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            detectedSourceLanguage: { type: Type.STRING },
-            genre: { type: Type.STRING },
-            narrativeVoice: { type: Type.STRING },
-            register: { type: Type.STRING },
-            tense: { type: Type.STRING },
-            formality: { type: Type.STRING },
-            rhythmNotes: { type: Type.STRING },
-            culturalNotes: { type: Type.STRING },
-            translatorGuidance: { type: Type.STRING },
-            glossary: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  source: { type: Type.STRING },
-                  target: { type: Type.STRING },
-                  note: { type: Type.STRING },
-                  keepAsIs: { type: Type.BOOLEAN },
-                },
-                required: ['source', 'target'],
-              },
-            },
-          },
-          required: [
-            'detectedSourceLanguage',
-            'genre',
-            'narrativeVoice',
-            'register',
-            'tense',
-            'formality',
-            'rhythmNotes',
-            'culturalNotes',
-            'translatorGuidance',
-            'glossary',
-          ],
-        },
-      },
-    });
-
-    res.json(robustJsonParse(response.text ?? ''));
+    const result = await synthesize(String(text), String(voice), style ? String(style) : undefined);
+    res.json({ ...result, characters: String(text).length, voice });
   } catch (error) {
-    handleError(res, error, 'Failed to build the translation brief');
-  }
-});
-
-/** Translates one segment, bound by the brief, the glossary and its neighbours. */
-app.post('/api/translate/segment', async (req, res) => {
-  try {
-    const { blocks, startIndex = 0, targetLanguage, brief, glossary, context, authorNotes } = req.body ?? {};
-    if (!Array.isArray(blocks) || blocks.length === 0 || !targetLanguage) {
-      res.status(400).json({ error: '"blocks" and "targetLanguage" are required.' });
-      return;
-    }
-
-    const typed = blocks as RichBlock[];
-    const serialized = serializeBlocksForTranslation(typed, Number(startIndex) || 0);
-
-    const prompt = `You are an award-winning literary translator working into ${targetLanguage}. You are translating a book that will be published and read by people who will never see the original. They must experience the book as literature written for them, not as a translation.
-
-TRANSLATION BRIEF (binding):
-${briefSummary(brief)}
-
-GLOSSARY (binding — these renderings must be used exactly, every time):
-${glossaryTable(glossary ?? [])}
-
-${authorNotes ? `AUTHOR'S INSTRUCTIONS: ${authorNotes}\n` : ''}
-TYPOGRAPHY: ${typographyFor(String(targetLanguage))}
-
-${context?.precedingSource ? `THE PASSAGE IMMEDIATELY BEFORE THIS ONE, IN THE ORIGINAL:\n${String(context.precedingSource).slice(-1200)}\n` : ''}
-${context?.precedingTarget ? `YOUR TRANSLATION OF THAT PASSAGE — continue its voice, vocabulary and flow exactly:\n${String(context.precedingTarget).slice(-1200)}\n` : ''}
-${context?.followingSource ? `WHAT COMES AFTER THIS PASSAGE, IN THE ORIGINAL (for context only — do not translate it):\n${String(context.followingSource).slice(0, 600)}\n` : ''}
-
-HOW TO TRANSLATE:
-- Translate meaning, effect and voice — never word for word. If a literal rendering would sound foreign, rewrite it so a native reader feels what the original reader felt.
-- Replace idioms with the idiom a ${targetLanguage} writer would actually use. Never calque an English expression.
-- Let the syntax be ${targetLanguage} syntax. Reorder clauses freely; the original's word order carries no authority.
-- Dialogue must sound like speech in ${targetLanguage}, with that language's contractions, hesitations and register — not translated English speech.
-- Keep the author's rhythm: short sentences stay short, long ones keep their sweep, paragraph breaks stay where they are.
-- Preserve deliberate ambiguity, understatement and humour. Do not explain, expand or add footnotes.
-- Wordplay: recreate the effect in ${targetLanguage} even if the literal content must change.
-- Numbers, units and dates: use the convention of the target readership.
-
-OUTPUT FORMAT — follow exactly:
-- Return one line per input line, with the same [number|type] tag at the start.
-- Translate only the text after the tag.
-- Keep <b> and <i> tags around the words they emphasise; move them if the target word order moves.
-- Lines tagged [n|scene] must be returned unchanged as [n|scene].
-- Do not merge, split, reorder, add or omit lines. Do not add commentary.
-
-PASSAGE:
-${serialized}`;
-
-    const response = await generateContentWithRetry({ contents: prompt });
-    const raw = (response.text ?? '').trim();
-    const { blocks: translated, missing } = parseTranslatedBlocks(raw, typed, Number(startIndex) || 0);
-
-    res.json({
-      blocks: translated,
-      missing,
-      targetText: blocksToPlainText(translated),
-      untranslatedCount: missing.length,
-    });
-  } catch (error) {
-    handleError(res, error, 'Failed to translate the segment');
-  }
-});
-
-/**
- * Second pass. The editor never sees the source, which is the point: without it
- * there is nothing to stay loyal to, so translationese has nowhere to hide.
- */
-app.post('/api/translate/polish', async (req, res) => {
-  try {
-    const { blocks, targetLanguage, brief, glossary, startIndex = 0 } = req.body ?? {};
-    if (!Array.isArray(blocks) || blocks.length === 0 || !targetLanguage) {
-      res.status(400).json({ error: '"blocks" and "targetLanguage" are required.' });
-      return;
-    }
-
-    const typed = blocks as RichBlock[];
-    const serialized = serializeBlocksForTranslation(typed, Number(startIndex) || 0);
-
-    const prompt = `You are a ${targetLanguage} literary editor at a serious publishing house. A novel is on your desk. You do not have any other version of it — this is simply a book in ${targetLanguage}, and your job is to make the prose excellent.
-
-WHAT THE BOOK IS MEANT TO BE:
-${briefSummary(brief)}
-
-TERMS THAT MUST NOT CHANGE (names and fixed renderings):
-${glossaryTable(glossary ?? [])}
-
-TYPOGRAPHY: ${typographyFor(String(targetLanguage))}
-
-EDIT FOR:
-- Any sentence that reads as though it were carried over from another language: unnatural word order, borrowed idioms, prepositions that are not how ${targetLanguage} says it.
-- Stiffness. Where a ${targetLanguage} writer would use a lighter construction, use it.
-- Dialogue that no one would actually speak. Make it sound like a real person of that character's age, class and mood.
-- Repetition the language does not need, and connectives that betray a foreign original.
-- Punctuation and quotation that do not follow ${targetLanguage} book conventions.
-
-DO NOT:
-- Change what happens, who says it, or what it means.
-- Add or remove sentences, imagery or information.
-- Alter any glossary term, name or place.
-- Modernise or sanitise the author's voice.
-
-OUTPUT FORMAT — follow exactly:
-- Return one line per input line, with the same [number|type] tag.
-- Keep <b> and <i> tags on the words they emphasise.
-- Lines tagged [n|scene] return unchanged.
-- No commentary.
-
-MANUSCRIPT:
-${serialized}`;
-
-    const response = await generateContentWithRetry({ contents: prompt });
-    const { blocks: polished, missing } = parseTranslatedBlocks((response.text ?? '').trim(), typed, Number(startIndex) || 0);
-
-    res.json({ blocks: polished, missing, targetText: blocksToPlainText(polished) });
-  } catch (error) {
-    handleError(res, error, 'Failed to polish the translation');
-  }
-});
-
-/** Flags glossary terms that went missing, which is how consistency actually breaks. */
-app.post('/api/translate/audit', async (req, res) => {
-  try {
-    const { blocks, sourceBlocks, glossary } = req.body ?? {};
-    if (!Array.isArray(blocks)) {
-      res.status(400).json({ error: '"blocks" is required.' });
-      return;
-    }
-
-    const targetText = blocksToPlainText(blocks as RichBlock[]).toLowerCase();
-    const sourceText = Array.isArray(sourceBlocks) ? blocksToPlainText(sourceBlocks as RichBlock[]).toLowerCase() : '';
-
-    const issues = (glossary as GlossaryEntry[] | undefined ?? [])
-      .filter((entry) => entry.source && sourceText.includes(entry.source.toLowerCase()))
-      .filter((entry) => {
-        const expected = (entry.keepAsIs ? entry.source : entry.target)?.toLowerCase();
-        return expected ? !targetText.includes(expected) : false;
-      })
-      .map((entry) => ({
-        source: entry.source,
-        expected: entry.keepAsIs ? entry.source : entry.target,
-        message: `"${entry.source}" appears in this passage but "${entry.keepAsIs ? entry.source : entry.target}" is not in the translation.`,
-      }));
-
-    res.json({ issues, checked: (glossary as GlossaryEntry[] | undefined ?? []).length });
-  } catch (error) {
-    handleError(res, error, 'Failed to audit the translation');
-  }
-});
-
-/** Assembles finished blocks into a publishable file. */
-app.post('/api/translate/export', async (req, res) => {
-  try {
-    const { blocks, format = 'docx', title, author, language } = req.body ?? {};
-    if (!Array.isArray(blocks) || blocks.length === 0) {
-      res.status(400).json({ error: 'There is nothing to export yet.' });
-      return;
-    }
-    const typed = blocks as RichBlock[];
-    const docTitle = String(title || 'Translated Manuscript');
-    const safeName = docTitle.trim().replace(/\s+/g, '_').replace(/[^\w-]/g, '') || 'translation';
-
-    switch (String(format).toLowerCase()) {
-      case 'epub': {
-        const epub = blocksToEpub(typed, docTitle, {
-          author: author ? String(author) : undefined,
-          language: language ? String(language) : undefined,
-        });
-        res.setHeader('X-Epub-Valid', String(validateEpubStructure(epub).valid));
-        sendDocument(res, epub, `${safeName}.epub`, 'epub');
-        return;
-      }
-      case 'pdf':
-        sendDocument(res, await blocksToPdf(typed, docTitle), `${safeName}.pdf`, 'pdf');
-        return;
-      case 'txt':
-        sendDocument(res, Buffer.from(blocksToPlainText(typed), 'utf8'), `${safeName}.txt`, 'txt');
-        return;
-      case 'docx':
-      default:
-        sendDocument(res, await blocksToDocx(typed, docTitle), `${safeName}.docx`, 'docx');
-    }
-  } catch (error) {
-    handleError(res, error, 'Failed to export the translation');
-  }
-});
-
-// ---------------------------------------------------------------------------
-// API — Author Empire marketing tools
-// ---------------------------------------------------------------------------
-
-app.post('/api/author-empire/generate-titles', async (req, res) => {
-  try {
-    const { premise, genre, audience, tone, keywords, count = 8 } = req.body ?? {};
-    const prompt = `You are a bestselling-title strategist for Amazon KDP.
-
-Premise: ${premise || 'not provided'}
-Genre: ${genre || 'unspecified'} | Audience: ${audience || 'general readers'} | Tone: ${tone || 'unspecified'}
-Keywords to consider: ${Array.isArray(keywords) ? keywords.join(', ') : keywords || 'none'}
-
-Produce ${Number(count) || 8} distinct title candidates. Vary the angles: benefit-driven, curiosity gap,
-metaphorical, provocative, and category-classic. Titles must be under 60 characters and readable at thumbnail size.`;
-
-    const response = await generateContentWithRetry({
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            titles: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  title: { type: Type.STRING },
-                  subtitle: { type: Type.STRING },
-                  angle: { type: Type.STRING },
-                  rationale: { type: Type.STRING },
-                  searchAppeal: { type: Type.INTEGER },
-                },
-                required: ['title', 'subtitle', 'angle', 'rationale', 'searchAppeal'],
-              },
-            },
-          },
-          required: ['titles'],
-        },
-      },
-    });
-    res.json(robustJsonParse(response.text ?? ''));
-  } catch (error) {
-    handleError(res, error, 'Failed to generate titles');
-  }
-});
-
-app.post('/api/author-empire/generate-blurb', async (req, res) => {
-  try {
-    const { title, subtitle, premise, genre, audience, tone, comparableTitles } = req.body ?? {};
-    const prompt = `You are a direct-response copywriter for book marketing.
-
-Title: ${title || 'Untitled'}${subtitle ? ` — ${subtitle}` : ''}
-Genre: ${genre || 'unspecified'} | Audience: ${audience || 'general readers'} | Tone: ${tone || 'unspecified'}
-Premise: ${premise || 'not provided'}
-Comparable titles: ${Array.isArray(comparableTitles) ? comparableTitles.join(', ') : comparableTitles || 'none supplied'}
-
-Write a complete marketing package. The Amazon description must use short punchy paragraphs,
-open with a hook line, and end with a call to action. Keywords must be real search phrases a
-reader would type, not abstract themes.`;
-
-    const response = await generateContentWithRetry({
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            tagline: { type: Type.STRING },
-            elevatorPitch: { type: Type.STRING },
-            backCoverBlurb: { type: Type.STRING },
-            amazonDescription: { type: Type.STRING },
-            keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
-            categories: { type: Type.ARRAY, items: { type: Type.STRING } },
-            targetReader: { type: Type.STRING },
-          },
-          required: ['tagline', 'elevatorPitch', 'backCoverBlurb', 'amazonDescription', 'keywords', 'categories', 'targetReader'],
-        },
-      },
-    });
-    res.json(robustJsonParse(response.text ?? ''));
-  } catch (error) {
-    handleError(res, error, 'Failed to generate the blurb package');
-  }
-});
-
-app.post('/api/author-empire/analyze-cover', upload.single('image'), async (req, res) => {
-  try {
-    const inlineBase64: string | undefined = req.file
-      ? req.file.buffer.toString('base64')
-      : typeof req.body?.imageBase64 === 'string'
-        ? req.body.imageBase64.replace(/^data:[^;]+;base64,/, '')
-        : undefined;
-
-    if (!inlineBase64) {
-      res.status(400).json({ error: 'Upload a cover image under "image" or send "imageBase64" in the body.' });
-      return;
-    }
-    if (!geminiClient) throw new AiUnavailableError();
-
-    const mimeType = req.file?.mimetype ?? String(req.body?.mimeType ?? 'image/png');
-    const { title, genre, audience } = req.body ?? {};
-
-    const instruction = `You are a book cover design director auditing a cover for Amazon KDP.
-
-Book: ${title || 'unknown title'} | Genre: ${genre || 'unspecified'} | Audience: ${audience || 'general readers'}
-
-Audit the attached cover for: genre signalling, thumbnail legibility at 160px, typography hierarchy,
-colour contrast, focal clarity, and how it compares to category bestsellers. Score each 1-10 and be blunt
-about what to change.`;
-
-    const response = await generateContentWithRetry({
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: instruction }, { inlineData: { mimeType, data: inlineBase64 } }],
-        },
-      ],
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            overallScore: { type: Type.INTEGER },
-            genreSignalling: { type: Type.STRING },
-            thumbnailLegibility: { type: Type.STRING },
-            typography: { type: Type.STRING },
-            colourAndContrast: { type: Type.STRING },
-            focalClarity: { type: Type.STRING },
-            strengths: { type: Type.ARRAY, items: { type: Type.STRING } },
-            fixes: { type: Type.ARRAY, items: { type: Type.STRING } },
-combinedVerdict: { type: Type.STRING },
-          },
-          required: ['overallScore', 'genreSignalling', 'thumbnailLegibility', 'typography', 'colourAndContrast', 'focalClarity', 'strengths', 'fixes', 'combinedVerdict'],
-        },
-      },
-    });
-    res.json(robustJsonParse(response.text ?? ''));
-  } catch (error) {
-    handleError(res, error, 'Failed to analyze the cover');
+    handleError(res, error, 'Failed to generate speech');
   }
 });
 

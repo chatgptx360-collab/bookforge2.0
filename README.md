@@ -1,8 +1,8 @@
 # BookForge
 
-A manuscript file converter and reader/editor. Drop in DOCX, PDF, EPUB, TXT or RTF
-files and get clean conversions back — or load a manuscript, edit it as structured
-sections, and read it in a typeset reader.
+A manuscript file converter, e-reader and narrator. Drop in DOCX, PDF, EPUB, TXT
+or RTF files and get clean conversions back — or load a manuscript, edit it as
+structured sections, read it in a typeset reader, and turn it into an audiobook.
 
 - **File Converter** (`/converter`) — multi-file drag & drop, per-file progress,
   sequential conversion, automatic downloads and a "Download All (ZIP)" batch.
@@ -12,11 +12,11 @@ sections, and read it in a typeset reader.
   page, table of contents and chapters; four editor themes, three typefaces, font
   sizing, split-at-cursor, word/character counts; export to TXT, server DOCX, or a
   KDP-layout DOCX built entirely in the browser.
-- **Book Translation** (`/translate`) — upload a whole manuscript and get a
-  publishable translation back. See **Translation** below.
-- **Author Studio** (`/studio`) — translation, line editing, chapter blueprints
-  and drafting, title candidates, marketing copy, cover generation and cover
-  audits. Needs an AI key; everything else does not.
+- **Audiobook Studio** (`/audiobook`) — upload a manuscript, choose a narrator,
+  and it is read chapter by chapter into downloadable WAV or MP3. See **Speech**
+  below.
+- **TTS Studio** (`/speech`) — paste any passage, choose a narrator and a
+  delivery, and get audio back as WAV or MP3.
 - **Reader** — a full e-reader, not a scroll view: paginated spreads (two pages on
   wide screens, one on mobile), four themes, four typefaces, size/spacing/margin
   controls, table of contents with per-chapter time estimates, in-book search,
@@ -27,7 +27,8 @@ sections, and read it in a typeset reader.
 
 React 19 · TypeScript · Vite 6 · Tailwind CSS v4 · Motion · lucide-react ·
 Express 4 · mammoth · pdf-parse · pdf-lib · docx · adm-zip · multer ·
-`@google/genai` · JSZip. Deploys to Vercel as a serverless function at `/api`.
+`@google/genai` · JSZip · lamejs. Deploys to Vercel as a serverless function at
+`/api`.
 
 ## Getting started
 
@@ -63,15 +64,14 @@ different Node ABI — reinstall on Node 22 LTS.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `GEMINI_API_KEY` | for AI routes | Translation, drafting, marketing copy, covers |
+| `GEMINI_API_KEY` | for AI routes | Speech synthesis and the reader's lookup |
 | `OPENROUTER_API_KEY` | optional | Text-route fallback used when Gemini is absent, failing or out of quota |
 | `GEMINI_MODELS` | optional | Comma-separated rotation list for quota failures |
-| `GEMINI_IMAGE_MODEL` | optional | Defaults to `imagen-4.0-generate-001` |
+| `GEMINI_TTS_MODEL` | optional | Defaults to `gemini-2.5-flash-preview-tts` |
 | `OPENROUTER_MODEL` | optional | Defaults to `google/gemini-2.5-flash` |
-| `AI_RATE_LIMIT` | optional | AI calls per IP per hour (default 40) |
+| `AI_RATE_LIMIT` | optional | Text AI calls per IP per hour (default 40) |
+| `TTS_RATE_LIMIT` | optional | Speech calls per IP per hour (default 4000 — a book is thousands of passages) |
 | `CONVERT_RATE_LIMIT` | optional | Conversions per IP per hour (default 120) |
-| `COVER_RATE_LIMIT` | optional | Cover generations per IP per hour (default 10) |
-| `TRANSLATE_RATE_LIMIT` | optional | Translation calls per IP per hour (default 1200 — a novel needs hundreds) |
 | `PORT` | optional | Defaults to `3000` |
 
 Conversion, parsing and all DOCX/EPUB/PDF/RTF export routes need **no** API key.
@@ -80,10 +80,10 @@ AI routes return HTTP 503 with a clear message when no provider is configured.
 **Provider selection.** Gemini is used when `GEMINI_API_KEY` is present. If a
 call fails or every model in the rotation is exhausted and `OPENROUTER_API_KEY`
 is also set, the request falls back to OpenRouter automatically. With only
-`OPENROUTER_API_KEY`, every text route uses OpenRouter directly — but cover
-generation and cover audit need Gemini, since they depend on its image and
-multimodal APIs. `GET /api/health` reports which provider is active and whether
-a fallback is armed.
+`OPENROUTER_API_KEY`, every text route uses OpenRouter directly — but **speech
+needs Gemini**, since OpenRouter exposes no equivalent audio modality.
+`GET /api/health` reports which provider is active, whether a fallback is armed,
+and which speech model is in use.
 
 ## API
 
@@ -97,25 +97,14 @@ Mounted at `/api`, all `POST` unless noted.
 | `/api/book/validate-epub` | multipart `file` | `{ valid, errors[], warnings[] }` |
 | `/api/book/export-custom-docx` | `{ title, subtitle, author, chapters[] }` | DOCX |
 | `/api/book/export-docx` | Book project JSON | KDP-layout DOCX with front/back matter |
-| `/api/book/export-translated-docx` | `{ title, author, language, chapters[] }` | DOCX |
-| `/api/book/translate-chunk` | `{ text, targetLanguage }` | `{ translatedText }` |
-| `/api/translate/prepare` | multipart `file` | Blocks, chapter-aware segments, word count |
-| `/api/translate/brief` | `{ blocks, targetLanguage, … }` | Voice brief + binding glossary |
-| `/api/translate/segment` | `{ blocks, brief, glossary, context }` | Translated blocks, structure preserved |
-| `/api/translate/polish` | `{ blocks, brief, glossary }` | Native-editor pass, source withheld |
-| `/api/translate/audit` | `{ blocks, sourceBlocks, glossary }` | Glossary terms that went missing |
-| `/api/translate/export` | `{ blocks, format, title, author }` | DOCX / EPUB / PDF / TXT download |
 | `/api/book/lookup` | `{ text, context?, targetLanguage? }` | `{ explanation }` for the reader's lookup |
-| `/api/book/enhance-draft` | `{ text, instruction?, intensity? }` | `{ enhancedText }` |
-| `/api/book/analyze-discovery` | Concept answers | Development analysis |
-| `/api/book/generate-outline` | Project brief | Chapter-by-chapter blueprint |
-| `/api/book/generate-chapter` | `{ chapterOutline, … }` | `{ chapterText, … }` |
-| `/api/book/generate-cover` | `{ title, genre, mood, … }` | `{ imageUrl }` (data URI) |
-| `/api/author-empire/generate-titles` | `{ premise, genre, … }` | Title candidates |
-| `/api/author-empire/generate-blurb` | `{ title, premise, … }` | Marketing package |
-| `/api/author-empire/analyze-cover` | multipart `image` or `{ imageBase64 }` | Cover audit |
+| `GET /api/tts/voices` | — | `{ voices[], model, available, format }` |
+| `/api/tts/plan` | `{ text, maxChars? }` | `{ chunks[], characters, estimatedSeconds }` |
+| `/api/tts/speak` | `{ text, voice?, style? }` | `{ audioBase64, mimeType, sampleRate }` — raw 16-bit PCM |
 
 Uploads are capped at 25 MB; oversized files get a 413 with a readable message.
+`/api/tts/speak` rejects passages over 4,500 characters with a 413 telling you to
+split them — `/api/tts/plan` does that for you.
 
 ## Reader
 
@@ -137,39 +126,37 @@ State is per book — position, bookmarks, highlights and notes are keyed by
 title + author in `localStorage`, and the 25 most recent books are retained.
 Typography settings are global.
 
-## Translation
+## Speech
 
-Machine translation fails a book in four predictable ways: the voice drifts
-between chunks, names and invented terms change spelling halfway through,
-structure and emphasis are flattened, and the prose reads translated. The
-pipeline is built around those failures.
+Both speech views run on Gemini's TTS models through the same three routes, and
+both hand you a finished file rather than a stream you have to capture.
 
-1. **Brief first.** `/api/translate/brief` samples five points across the whole
-   manuscript — not just the opening — and fixes the source language, genre,
-   narrative voice, register, tense, and the formality convention to use
-   (tú/usted, tu/vous, plain/polite). It also extracts a glossary of every
-   proper noun, invented term and honorific, with the exact target rendering.
-   You can edit every row and mark names "keep" so they are never translated.
-2. **Context-carrying passes.** The book is segmented at chapter boundaries,
-   never mid-paragraph. Each segment is translated with the brief and glossary
-   as binding constraints, plus the tail of the previous source *and* its
-   finished translation, so voice and vocabulary continue across the seam.
-   Prompts direct the translator to reorder clauses into target syntax, replace
-   idioms with native equivalents, keep dialogue speakable, and follow that
-   language's punctuation conventions (guillemets, ¿ ¡, 「」, danda).
-3. **Native-editor pass.** `/api/translate/polish` re-reads each segment
-   *without the source*. With nothing to be loyal to, translationese has
-   nowhere to hide; the editor is told to fix borrowed idiom, foreign word
-   order and unspeakable dialogue while leaving meaning and names untouched.
-4. **Structure is never at the model's mercy.** Blocks are sent as numbered,
-   tagged lines; block types and order come from our side. A dropped line keeps
-   its source text rather than vanishing, and emphasis is recovered whether the
-   model returns `<b>`, `<B>`, `<strong>` or `**markdown**`.
+**Thirty narrators.** `GET /api/tts/voices` returns the prebuilt voice catalogue
+with a character note, a timbre (warm / clear / bright / deep) and what each one
+suits. The picker filters by timbre and previews any voice on a fixed line, so
+you hear a narrator before committing a book to them.
 
-Jobs live in IndexedDB, so a book-length run survives a refresh and resumes
-where it stopped; failed segments can be retried individually. Export to DOCX,
-EPUB, PDF or TXT at any point — untranslated sections fall back to the original,
-so an early export is still a complete book.
+**Delivery is directed, not dialled.** These models take direction in prose, so
+the style box is passed as an instruction ahead of the passage — "read this
+warmly and unhurriedly, like an audiobook narrator", or anything you write
+yourself. The instruction is never spoken.
+
+**Long text is split before it is spoken.** A single request is bounded, so
+`/api/tts/plan` breaks text at paragraph boundaries first and sentence
+boundaries only when a paragraph is itself too long — no request is ever cut
+mid-thought. Audiobook chapters get their title read first (optional), 0.4 s
+between passages, and a 0.8 s beat at the end so chapters do not run together.
+
+**Assembly happens in the browser.** The model returns raw 16-bit PCM per
+passage; the client concatenates it, writes a canonical 44-byte WAV header, and
+encodes MP3 on demand with lamejs (loaded lazily — most sessions never ask for
+it). Keeping this client-side is what makes book-length audio possible at all:
+neither the function timeout nor the response size caps how long a book can be.
+
+**A failed chapter does not end the run.** Chapters are narrated in order, and
+one that fails is marked and skipped; the rest continue and the failures can be
+retried afterwards. Download any chapter as WAV or MP3, or the whole book as a
+ZIP of either.
 
 ## Conversion notes
 
@@ -224,11 +211,13 @@ so building there would make `server.cjs` and its sourcemap publicly downloadabl
 api/index.mjs              Vercel serverless entry (DOM shims + bundled app)
 server-build/server.cjs    Built server bundle (git-ignored, never published)
 server.ts                  Express app: every API route + all conversion logic
-src/App.tsx                History-API router: converter | reader
+src/App.tsx                History-API router: converter | reader | audiobook | speech
 src/components/            Sidebar, ConverterPanel, ReaderEditorPanel, BookReader
-src/components/StudioPanel.tsx  AI tools view
-src/components/studio/     Studio tools and shared request/UI primitives
+src/components/AudiobookPanel.tsx  Manuscript → chapter-by-chapter narration
+src/components/TtsStudioPanel.tsx  Paste text → speech
+src/components/tts/        Voice catalogue hook and picker with previews
 src/components/reader/     Pagination content, panels, themes, book model
+src/utils/audio.ts         PCM stitching, WAV writer, lazy MP3 encoder
 src/utils/readerStore.ts   Per-book position, bookmarks, highlights, settings
 src/utils/docxExporter.ts  Client-side KDP DOCX builder (lazy-loaded)
 tests/conversion.test.mjs  Round-trip and format-validity tests
@@ -245,4 +234,5 @@ in the published `dist/`, and validates a generated EPUB with EPUBCheck 5.2.1.
 
 Covers manuscript structure parsing, EPUB 3.0 package validity (mimetype offset and
 storage method, manifest/spine integrity, no NCX), DOCX/PDF/RTF round-trips through
-the extractors, the ZIP writer, entity decoding and JSON self-healing.
+the extractors, the ZIP writer, entity decoding, JSON self-healing, and speech
+chunk planning (no chunk over the limit, no text lost, sentence-boundary splits).

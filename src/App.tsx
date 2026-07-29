@@ -3,17 +3,17 @@ import { BookOpen, Menu } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import ConverterPanel from './components/ConverterPanel';
 import ReaderEditorPanel from './components/ReaderEditorPanel';
-import StudioPanel from './components/StudioPanel';
-import TranslatePanel from './components/TranslatePanel';
+import AudiobookPanel from './components/AudiobookPanel';
+import TtsStudioPanel from './components/TtsStudioPanel';
 
-export type ViewId = 'converter' | 'reader' | 'studio' | 'translate';
+export type ViewId = 'converter' | 'reader' | 'audiobook' | 'speech';
 
 const ROUTES: Record<string, ViewId> = {
   '/': 'converter',
   '/converter': 'converter',
   '/reader': 'reader',
-  '/studio': 'studio',
-  '/translate': 'translate',
+  '/audiobook': 'audiobook',
+  '/speech': 'speech',
 };
 
 function viewFromPath(pathname: string): ViewId {
@@ -27,6 +27,12 @@ export default function App() {
   const [navOpen, setNavOpen] = useState(false);
 
   useEffect(() => {
+    // Retired views (the old translator and author studio) still live in
+    // people's bookmarks; land them on the converter with a matching URL
+    // rather than leaving a dead path in the address bar.
+    if (!(window.location.pathname in ROUTES)) {
+      window.history.replaceState({ view: 'converter' }, '', '/converter');
+    }
     const onPopState = () => setActiveView(viewFromPath(window.location.pathname));
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
@@ -75,10 +81,10 @@ export default function App() {
 
         {activeView === 'reader' ? (
           <ReaderEditorPanel />
-        ) : activeView === 'studio' ? (
-          <StudioPanel />
-        ) : activeView === 'translate' ? (
-          <TranslatePanel />
+        ) : activeView === 'audiobook' ? (
+          <AudiobookPanel />
+        ) : activeView === 'speech' ? (
+          <TtsStudioPanel />
         ) : (
           <ConverterPanel />
         )}

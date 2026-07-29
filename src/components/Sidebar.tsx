@@ -1,4 +1,4 @@
-import { BookOpen, Languages, RefreshCw, Sparkles, X } from 'lucide-react';
+import { AudioLines, BookOpen, Headphones, RefreshCw, X } from 'lucide-react';
 import type { ViewId } from '../App';
 
 interface SidebarProps {
@@ -12,8 +12,8 @@ interface SidebarProps {
 const NAV_ITEMS: { id: ViewId; label: string; hint: string; icon: typeof BookOpen }[] = [
   { id: 'converter', label: 'File Converter', hint: 'PDF, ePub, Docx, RTF, TXT', icon: RefreshCw },
   { id: 'reader', label: 'Reader & Editor', hint: 'Read, edit & save book files', icon: BookOpen },
-  { id: 'translate', label: 'Book Translation', hint: 'Whole manuscripts, publishable', icon: Languages },
-  { id: 'studio', label: 'Author Studio', hint: 'Edit, title, blurb, cover', icon: Sparkles },
+  { id: 'audiobook', label: 'Audiobook Studio', hint: 'A book, read chapter by chapter', icon: Headphones },
+  { id: 'speech', label: 'TTS Studio', hint: 'Paste text, get audio', icon: AudioLines },
 ];
 
 export default function Sidebar({ activeView, setActiveView, isOpen = false, onClose }: SidebarProps) {
