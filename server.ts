@@ -1194,14 +1194,44 @@ function runsToXhtml(runs: RichRun[]): string {
     .join('');
 }
 
+export interface EpubCover {
+  data: Buffer;
+  mimeType: string;
+}
+
+export interface EpubOptions {
+  author?: string;
+  language?: string;
+  publisher?: string;
+  description?: string;
+  isbn?: string;
+  series?: string;
+  cover?: EpubCover;
+}
+
+const COVER_EXTENSIONS: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+};
+
 /**
  * Builds a valid EPUB 3.0 package: no NCX, a proper `nav.xhtml` carrying
  * `epub:type="toc"`, a stylesheet, and an uncompressed leading mimetype entry.
  * Inline emphasis and heading levels from the source survive into the output.
  */
-export function blocksToEpub(blocks: RichBlock[], title = 'Converted Book', author = 'BookForge'): Buffer {
+export function blocksToEpub(
+  blocks: RichBlock[],
+  title = 'Converted Book',
+  authorOrOptions: string | EpubOptions = 'BookForge',
+): Buffer {
+  const options: EpubOptions = typeof authorOrOptions === 'string' ? { author: authorOrOptions } : authorOrOptions;
+  const author = options.author?.trim() || 'BookForge';
+  const language = options.language?.trim() || 'en';
+
   const chapters = groupBlocksIntoChapters(blocks, title);
-  const bookId = `urn:uuid:${crypto.randomUUID()}`;
+  const bookId = options.isbn?.trim() ? `urn:isbn:${options.isbn.trim()}` : `urn:uuid:${crypto.randomUUID()}`;
   const modified = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
   const manifest: string[] = [
@@ -1209,13 +1239,57 @@ export function blocksToEpub(blocks: RichBlock[], title = 'Converted Book', auth
     '    <item id="css" href="stylesheet.css" media-type="text/css"/>',
     '    <item id="titlepage" href="titlepage.xhtml" media-type="application/xhtml+xml"/>',
   ];
-  const spine: string[] = ['    <itemref idref="titlepage"/>'];
+  const spine: string[] = [];
   const navItems: string[] = [];
   const documents: ZipEntry[] = [];
+  const metadataExtras: string[] = [];
+
+  // --- cover -----------------------------------------------------------
+  if (options.cover) {
+    const extension = COVER_EXTENSIONS[options.cover.mimeType] ?? 'jpg';
+    const imageHref = `cover.${extension}`;
+    documents.push({ name: `OEBPS/${imageHref}`, data: options.cover.data });
+    manifest.push(
+      `    <item id="cover-image" href="${imageHref}" media-type="${options.cover.mimeType}" properties="cover-image"/>`,
+      '    <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>',
+    );
+    metadataExtras.push('    <meta name="cover" content="cover-image"/>');
+    spine.push('    <itemref idref="cover"/>');
+
+    const coverPage = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="${escapeXml(language)}" lang="${escapeXml(language)}">
+  <head>
+    <title>Cover</title>
+    <link rel="stylesheet" type="text/css" href="stylesheet.css"/>
+  </head>
+  <body>
+    <section epub:type="cover" class="cover">
+      <img src="${imageHref}" alt="Cover of ${escapeXml(title)}"/>
+    </section>
+  </body>
+</html>`;
+    documents.push({ name: 'OEBPS/cover.xhtml', data: Buffer.from(coverPage, 'utf8') });
+  }
+
+  spine.push('    <itemref idref="titlepage"/>');
+
+  if (options.publisher?.trim()) {
+    metadataExtras.push(`    <dc:publisher>${escapeXml(options.publisher.trim())}</dc:publisher>`);
+  }
+  if (options.description?.trim()) {
+    metadataExtras.push(`    <dc:description>${escapeXml(options.description.trim())}</dc:description>`);
+  }
+  if (options.series?.trim()) {
+    metadataExtras.push(
+      `    <meta property="belongs-to-collection" id="series">${escapeXml(options.series.trim())}</meta>`,
+      '    <meta refines="#series" property="collection-type">series</meta>',
+    );
+  }
 
   const titlePage = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en" lang="en">
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="${escapeXml(language)}" lang="${escapeXml(language)}">
   <head>
     <title>${escapeXml(title)}</title>
     <link rel="stylesheet" type="text/css" href="stylesheet.css"/>
@@ -1267,7 +1341,7 @@ export function blocksToEpub(blocks: RichBlock[], title = 'Converted Book', auth
 
     const xhtml = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="${escapeXml(language)}" lang="${escapeXml(language)}">
   <head>
     <title>${escapeXml(chapter.title)}</title>
     <link rel="stylesheet" type="text/css" href="stylesheet.css"/>
@@ -1286,7 +1360,7 @@ ${lines.join('\n')}
 
   const nav = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en" lang="en">
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="${escapeXml(language)}" lang="${escapeXml(language)}">
   <head>
     <title>Table of Contents</title>
     <link rel="stylesheet" type="text/css" href="stylesheet.css"/>
@@ -1301,7 +1375,7 @@ ${navItems.join('\n')}
     <nav epub:type="landmarks" id="landmarks" hidden="hidden">
       <h2>Guide</h2>
       <ol>
-        <li><a epub:type="titlepage" href="titlepage.xhtml">Title Page</a></li>
+${options.cover ? '        <li><a epub:type="cover" href="cover.xhtml">Cover</a></li>\n' : ''}        <li><a epub:type="titlepage" href="titlepage.xhtml">Title Page</a></li>
         <li><a epub:type="bodymatter" href="chapter1.xhtml">Begin Reading</a></li>
       </ol>
     </nav>
@@ -1309,16 +1383,16 @@ ${navItems.join('\n')}
 </html>`;
 
   const contentOpf = `<?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="BookID" xml:lang="en">
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="BookID" xml:lang="${escapeXml(language)}">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="BookID">${bookId}</dc:identifier>
     <dc:title>${escapeXml(title)}</dc:title>
-    <dc:language>en</dc:language>
+    <dc:language>${escapeXml(language)}</dc:language>
     <dc:creator id="author">${escapeXml(author)}</dc:creator>
     <dc:date>${modified}</dc:date>
     <meta property="dcterms:modified">${modified}</meta>
     <meta refines="#author" property="role" scheme="marc:relators">aut</meta>
-  </metadata>
+${metadataExtras.join('\n')}${metadataExtras.length > 0 ? '\n' : ''}  </metadata>
   <manifest>
 ${manifest.join('\n')}
   </manifest>
@@ -1353,24 +1427,149 @@ export function convertTextToEpub(text: string, title = 'Converted Book', author
   return blocksToEpub(textToBlocks(text), title, author);
 }
 
+export interface EpubValidation {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+/**
+ * Structural check mirroring the rules EPUBCheck fails most often. Not a
+ * replacement for EPUBCheck, but it catches a broken package before a user
+ * uploads it to a store.
+ */
+export function validateEpubStructure(buffer: Buffer): EpubValidation {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  try {
+    // The mimetype entry must be first, stored, and exact.
+    if (buffer.subarray(30, 38).toString('ascii') !== 'mimetype') {
+      errors.push('The mimetype entry is missing or is not the first file in the archive.');
+    } else {
+      if (buffer.readUInt16LE(8) !== 0) errors.push('The mimetype entry must be stored uncompressed.');
+      if (buffer.subarray(38, 58).toString('ascii') !== 'application/epub+zip') {
+        errors.push('The mimetype entry does not contain "application/epub+zip".');
+      }
+    }
+
+    const zip = new AdmZip(buffer);
+    const names = new Set(zip.getEntries().map((entry) => entry.entryName));
+    const read = (name: string) => zip.getEntry(name)?.getData().toString('utf8') ?? null;
+
+    const container = read('META-INF/container.xml');
+    if (!container) {
+      errors.push('META-INF/container.xml is missing.');
+      return { valid: false, errors, warnings };
+    }
+
+    const opfPath = container.match(/full-path="([^"]+)"/i)?.[1];
+    if (!opfPath || !names.has(opfPath)) {
+      errors.push('container.xml does not point at an existing package document.');
+      return { valid: false, errors, warnings };
+    }
+
+    const opf = read(opfPath) ?? '';
+    const opfDir = path.posix.dirname(opfPath);
+    const resolveHref = (href: string) => (opfDir === '.' ? href : path.posix.join(opfDir, href));
+
+    if (!/version="3\.\d+"/.test(opf)) errors.push('The package is not declared as EPUB 3.');
+    if (!/<dc:title>/.test(opf)) errors.push('dc:title is missing from the metadata.');
+    if (!/<dc:language>/.test(opf)) errors.push('dc:language is missing from the metadata.');
+    if (!/<dc:identifier/.test(opf)) errors.push('dc:identifier is missing from the metadata.');
+    if (!/dcterms:modified/.test(opf)) errors.push('The dcterms:modified timestamp is missing.');
+
+    const uniqueId = opf.match(/unique-identifier="([^"]+)"/i)?.[1];
+    if (uniqueId && !new RegExp(`<dc:identifier[^>]*id="${uniqueId}"`).test(opf)) {
+      errors.push('unique-identifier does not resolve to a dc:identifier element.');
+    }
+
+    const manifestEntries = new Map<string, string>();
+    let navHref: string | null = null;
+    for (const item of opf.match(/<item\b[^>]*>/gi) ?? []) {
+      const id = item.match(/\bid="([^"]+)"/i)?.[1];
+      const href = item.match(/\bhref="([^"]+)"/i)?.[1];
+      if (!id || !href) continue;
+      manifestEntries.set(id, href);
+      if (/properties="[^"]*\bnav\b[^"]*"/i.test(item)) navHref = href;
+      const resolved = resolveHref(decodeURIComponent(href));
+      if (!names.has(resolved) && !/^https?:/i.test(href)) {
+        errors.push(`The manifest lists "${href}" but the file is not in the archive.`);
+      }
+    }
+
+    if (!navHref) errors.push('No navigation document is declared with properties="nav".');
+    else {
+      const nav = read(resolveHref(navHref));
+      if (!nav) errors.push('The navigation document is missing from the archive.');
+      else if (!/epub:type="toc"/.test(nav)) errors.push('The navigation document has no epub:type="toc" nav element.');
+    }
+
+    const spineIds = [...(opf.match(/<itemref\b[^>]*>/gi) ?? [])]
+      .map((ref) => ref.match(/idref="([^"]+)"/i)?.[1])
+      .filter((id): id is string => Boolean(id));
+    if (spineIds.length === 0) errors.push('The spine is empty.');
+    for (const id of spineIds) {
+      if (!manifestEntries.has(id)) errors.push(`Spine item "${id}" is not present in the manifest.`);
+    }
+
+    if ([...names].some((name) => name.toLowerCase().endsWith('.ncx'))) {
+      warnings.push('An NCX file is present; EPUB 3 readers do not need one.');
+    }
+    if (![...manifestEntries.values()].some((href) => /cover/i.test(href))) {
+      warnings.push('No cover image is declared. Most stores expect one.');
+    }
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : 'The archive could not be read.');
+  }
+
+  return { valid: errors.length === 0, errors, warnings };
+}
+
 const WINANSI_SUBSTITUTIONS: Record<string, string> = {
-  '\u2018': "'", '\u2019': "'", '\u201A': ',', '\u201B': "'",
-  '\u201C': '"', '\u201D': '"', '\u201E': '"',
-  '\u2013': '-', '\u2014': '--', '\u2015': '--', '\u2212': '-',
-  '\u2026': '...', '\u2022': '*', '\u00A0': ' ', '\u202F': ' ', '\u2009': ' ',
-  '\u2028': ' ', '\u2029': ' ', '\uFB01': 'fi', '\uFB02': 'fl', '\u2044': '/',
-  '\u00AD': '-', '\u2766': '*', '\u2767': '*', '\u275B': "'", '\u275C': "'",
-  '\u00B7': '.', '\u2039': '<', '\u203A': '>', '\u2032': "'", '\u2033': '"',
+  '\u2018': '\'',
+  '\u2019': '\'',
+  '\u201A': ',',
+  '\u201B': '\'',
+  '\u201C': '"',
+  '\u201D': '"',
+  '\u201E': '"',
+  '\u2013': '-',
+  '\u2014': '--',
+  '\u2015': '--',
+  '\u2212': '-',
+  '\u2026': '...',
+  '\u2022': '*',
+  '\u00A0': ' ',
+  '\u202F': ' ',
+  '\u2009': ' ',
+  '\u2028': ' ',
+  '\u2029': ' ',
+  '\uFB01': 'fi',
+  '\uFB02': 'fl',
+  '\u2044': '/',
+  '\u00AD': '-',
+  '\u2766': '*',
+  '\u2767': '*',
+  '\u275B': '\'',
+  '\u275C': '\'',
+  '\u00B7': '.',
+  '\u2039': '<',
+  '\u203A': '>',
+  '\u2032': '\'',
+  '\u2033': '"',
 };
 
 /**
  * pdf-lib's standard fonts only speak WinAnsi, so map the common typographic
  * characters and drop anything else rather than throwing mid-document.
+ *
+ * The character classes use escapes deliberately: U+2028 is a JavaScript line
+ * terminator, so a literal one inside a regex breaks the parse.
  */
 function sanitizeForStandardFont(text: string): string {
   return text
-    .replace(/[\u2018\u2019\u201A\u201B\u201C\u201D\u201E\u2013\u2014\u2015\u2212\u2026\u2022\u00A0\u202F\u2009\u2028\u2029\uFB01\uFB02\u2044\u00AD\u2766\u2767\u275B\u275C\u00B7\u2039\u203A\u2032\u2033]/g,
-      (char) => WINANSI_SUBSTITUTIONS[char] ?? ' ')
+    .replace(/[\u2018\u2019\u201A\u201B\u201C\u201D\u201E\u2013\u2014\u2015\u2212\u2026\u2022\u00A0\u202F\u2009\u2028\u2029\uFB01\uFB02\u2044\u00AD\u2766\u2767\u275B\u275C\u00B7\u2039\u203A\u2032\u2033]/g, (char) => WINANSI_SUBSTITUTIONS[char] ?? ' ')
     .replace(/[^\n\t\x20-\x7E\u00A0-\u00FF\u20AC\u201A\u0192\u2020\u2021\u02C6\u2030\u0160\u0152\u017D\u2122\u0161\u0153\u017E\u0178]/g, '');
 }
 
@@ -1926,9 +2125,19 @@ app.post('/api/book/parse-file', upload.single('file'), async (req, res) => {
   }
 });
 
-app.post('/api/book/convert', upload.single('file'), async (req, res) => {
-  const file = requireFile(req, res);
-  if (!file) return;
+const convertUpload = upload.fields([
+  { name: 'file', maxCount: 1 },
+  { name: 'coverImage', maxCount: 1 },
+]);
+
+app.post('/api/book/convert', convertUpload, async (req, res) => {
+  const uploaded = req.files as Record<string, Express.Multer.File[]> | undefined;
+  const file = req.file ?? uploaded?.file?.[0];
+  if (!file) {
+    res.status(400).json({ error: 'No file was uploaded. Attach a file under the "file" field.' });
+    return;
+  }
+  const coverFile = uploaded?.coverImage?.[0];
 
   const targetFormat = String(req.body?.targetFormat ?? '').toLowerCase();
   if (!Object.keys(MIME_TYPES).includes(targetFormat)) {
@@ -1966,9 +2175,28 @@ app.post('/api/book/convert', upload.single('file'), async (req, res) => {
       case 'pdf':
         sendDocument(res, await blocksToPdf(blocks, title), fileName, targetFormat);
         return;
-      case 'epub':
-        sendDocument(res, blocksToEpub(blocks, title, author), fileName, targetFormat);
+      case 'epub': {
+        const cover =
+          coverFile && /^image\/(png|jpeg|webp|gif)$/.test(coverFile.mimetype)
+            ? { data: coverFile.buffer, mimeType: coverFile.mimetype }
+            : undefined;
+        const epub = blocksToEpub(blocks, title, {
+          author,
+          language: String(req.body?.language ?? '').trim() || 'en',
+          publisher: String(req.body?.publisher ?? '').trim() || undefined,
+          description: String(req.body?.description ?? '').trim() || undefined,
+          isbn: String(req.body?.isbn ?? '').trim() || undefined,
+          series: String(req.body?.series ?? '').trim() || undefined,
+          cover,
+        });
+        const check = validateEpubStructure(epub);
+        // Surfaced in the UI as a validation badge on the download card.
+        res.setHeader('X-Epub-Valid', String(check.valid));
+        if (check.warnings.length > 0) res.setHeader('X-Epub-Warnings', String(check.warnings.length));
+        res.setHeader('Access-Control-Expose-Headers', 'X-Epub-Valid, X-Epub-Warnings');
+        sendDocument(res, epub, fileName, targetFormat);
         return;
+      }
       case 'rtf':
         sendDocument(res, Buffer.from(blocksToRtf(blocks, title), 'utf8'), fileName, targetFormat);
         return;
@@ -1978,6 +2206,20 @@ app.post('/api/book/convert', upload.single('file'), async (req, res) => {
     }
   } catch (error) {
     handleError(res, error, 'Failed to convert the uploaded file');
+  }
+});
+
+app.post('/api/book/validate-epub', upload.single('file'), async (req, res) => {
+  const file = requireFile(req, res);
+  if (!file) return;
+  try {
+    if (sniffFormat(file.buffer) !== 'epub') {
+      res.status(400).json({ error: 'That file is not an EPUB package.' });
+      return;
+    }
+    res.json({ fileName: file.originalname, ...validateEpubStructure(file.buffer) });
+  } catch (error) {
+    handleError(res, error, 'Failed to validate the EPUB');
   }
 });
 

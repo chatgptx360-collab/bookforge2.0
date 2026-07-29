@@ -286,3 +286,59 @@ test('PDF renders styled runs without throwing', async () => {
   const pdf = await blocksToPdf(blocks, 'Styled');
   assert.equal(pdf.subarray(0, 5).toString('ascii'), '%PDF-');
 });
+
+test('EPUB accepts a cover and store metadata', () => {
+  const { blocksToEpub, textToBlocks, validateEpubStructure } = require('../server-build/server.cjs');
+  const AdmZip = require('adm-zip');
+
+  // 1x1 transparent PNG.
+  const cover = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  );
+
+  const epub = blocksToEpub(textToBlocks('Chapter 1: Alpha\n\nBody text.'), 'Metadata Test', {
+    author: 'Imogen Vale',
+    language: 'fr',
+    publisher: 'Small Hours Press',
+    isbn: '978-0-00-000000-0',
+    series: 'The Tidewrack Cycle',
+    cover: { data: cover, mimeType: 'image/png' },
+  });
+
+  const zip = new AdmZip(epub);
+  const names = zip.getEntries().map((e) => e.entryName);
+  assert.ok(names.includes('OEBPS/cover.png'), 'cover image is packaged');
+  assert.ok(names.includes('OEBPS/cover.xhtml'), 'cover page is packaged');
+
+  const opf = zip.readAsText('OEBPS/content.opf');
+  assert.match(opf, /properties="cover-image"/);
+  assert.match(opf, /<dc:identifier id="BookID">urn:isbn:978-0-00-000000-0<\/dc:identifier>/);
+  assert.match(opf, /<dc:language>fr<\/dc:language>/);
+  assert.match(opf, /<dc:publisher>Small Hours Press<\/dc:publisher>/);
+  assert.match(opf, /belongs-to-collection/);
+  assert.match(opf, /<itemref idref="cover"\/>/);
+
+  assert.deepEqual(validateEpubStructure(epub), { valid: true, errors: [], warnings: [] });
+});
+
+test('validateEpubStructure reports real structural problems', () => {
+  const { convertTextToEpub, validateEpubStructure, createZipArchive } = require('../server-build/server.cjs');
+
+  const good = convertTextToEpub('Chapter 1: Alpha\n\nBody.', 'Good');
+  const goodResult = validateEpubStructure(good);
+  assert.equal(goodResult.valid, true);
+  // No cover was supplied, so the check should say so without failing.
+  assert.ok(goodResult.warnings.some((w) => /cover/i.test(w)));
+
+  // An archive whose mimetype is neither first nor stored must be rejected.
+  const bad = createZipArchive([
+    { name: 'META-INF/container.xml', data: Buffer.from('<container/>') },
+    { name: 'mimetype', data: Buffer.from('application/epub+zip') },
+  ]);
+  const badResult = validateEpubStructure(bad);
+  assert.equal(badResult.valid, false);
+  assert.ok(badResult.errors.some((e) => /mimetype/i.test(e)));
+
+  assert.equal(validateEpubStructure(Buffer.from('not a zip at all')).valid, false);
+});

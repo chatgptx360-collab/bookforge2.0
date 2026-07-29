@@ -6,10 +6,15 @@ sections, and read it in a typeset reader.
 
 - **File Converter** (`/converter`) — multi-file drag & drop, per-file progress,
   sequential conversion, automatic downloads and a "Download All (ZIP)" batch.
+  EPUB targets take a cover image and store metadata, and every EPUB is checked
+  structurally before it reaches you.
 - **Reader & Editor** (`/reader`) — server-side parsing into title page, copyright
   page, table of contents and chapters; four editor themes, three typefaces, font
   sizing, split-at-cursor, word/character counts; export to TXT, server DOCX, or a
   KDP-layout DOCX built entirely in the browser.
+- **Author Studio** (`/studio`) — translation, line editing, chapter blueprints
+  and drafting, title candidates, marketing copy, cover generation and cover
+  audits. Needs an AI key; everything else does not.
 - **Reader** — a full e-reader, not a scroll view: paginated spreads (two pages on
   wide screens, one on mobile), four themes, four typefaces, size/spacing/margin
   controls, table of contents with per-chapter time estimates, in-book search,
@@ -60,6 +65,9 @@ different Node ABI — reinstall on Node 22 LTS.
 | `OPENROUTER_API_KEY` | optional | Fallback for the text routes when Gemini is absent |
 | `GEMINI_MODELS` | optional | Comma-separated rotation list for quota failures |
 | `GEMINI_IMAGE_MODEL` | optional | Defaults to `imagen-4.0-generate-001` |
+| `AI_RATE_LIMIT` | optional | AI calls per IP per hour (default 40) |
+| `CONVERT_RATE_LIMIT` | optional | Conversions per IP per hour (default 120) |
+| `COVER_RATE_LIMIT` | optional | Cover generations per IP per hour (default 10) |
 | `PORT` | optional | Defaults to `3000` |
 
 Conversion, parsing and all DOCX/EPUB/PDF/RTF export routes need **no** API key.
@@ -73,7 +81,8 @@ Mounted at `/api`, all `POST` unless noted.
 | --- | --- | --- |
 | `GET /api/health` | — | Status, Node version, active AI provider |
 | `/api/book/parse-file` | multipart `file` | `{ title, author, sections[], wordCount }` |
-| `/api/book/convert` | multipart `file`, `targetFormat` | Converted file download |
+| `/api/book/convert` | multipart `file`, `targetFormat`, optional `coverImage` and EPUB metadata | Converted file download, plus an `X-Epub-Valid` header for EPUB targets |
+| `/api/book/validate-epub` | multipart `file` | `{ valid, errors[], warnings[] }` |
 | `/api/book/export-custom-docx` | `{ title, subtitle, author, chapters[] }` | DOCX |
 | `/api/book/export-docx` | Book project JSON | KDP-layout DOCX with front/back matter |
 | `/api/book/export-translated-docx` | `{ title, author, language, chapters[] }` | DOCX |
@@ -121,6 +130,16 @@ Typography settings are global.
   safe equivalents and anything else is dropped, so a manuscript with smart quotes
   or a stray ❦ renders instead of throwing. Non-Latin scripts are not preserved in
   PDF output — convert to DOCX or EPUB for those.
+- **Formatting survives conversion.** DOCX and EPUB are read into a styled block
+  model (headings with levels, paragraphs, quotes, list items, scene breaks, and
+  runs carrying bold/italic), and every generator writes from it. A bold word in
+  a DOCX stays bold in the EPUB, the RTF and the PDF.
+- **PDF input is reflowed.** pdf-parse returns one line per printed line; the
+  extractor strips page markers and running heads, repairs hyphenation across
+  breaks, and rejoins wrapped lines into paragraphs.
+- **Uploads are identified by their bytes**, not their extension, and ZIP
+  containers are checked for entry count, uncompressed size and compression
+  ratio before anything is expanded.
 - **Chapter detection** recognises `Chapter 7`, `Part II`, `Chapter Three`,
   markdown headings, and named sections (Prologue, Epilogue, Introduction …), while
   rejecting dot-leader table-of-contents lines that look like headings.
@@ -150,6 +169,8 @@ server-build/server.cjs    Built server bundle (git-ignored, never published)
 server.ts                  Express app: every API route + all conversion logic
 src/App.tsx                History-API router: converter | reader
 src/components/            Sidebar, ConverterPanel, ReaderEditorPanel, BookReader
+src/components/StudioPanel.tsx  AI tools view
+src/components/studio/     Studio tools and shared request/UI primitives
 src/components/reader/     Pagination content, panels, themes, book model
 src/utils/readerStore.ts   Per-book position, bookmarks, highlights, settings
 src/utils/docxExporter.ts  Client-side KDP DOCX builder (lazy-loaded)
@@ -161,6 +182,9 @@ tests/conversion.test.mjs  Round-trip and format-validity tests
 ```bash
 npm test
 ```
+
+CI runs the same suite on Node 22 and 24, fails if the server bundle ever lands
+in the published `dist/`, and validates a generated EPUB with EPUBCheck 5.2.1.
 
 Covers manuscript structure parsing, EPUB 3.0 package validity (mimetype offset and
 storage method, manifest/spine integrity, no NCX), DOCX/PDF/RTF round-trips through

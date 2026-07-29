@@ -12,6 +12,9 @@ import {
   FileText,
   BadgeAlert,
   Archive,
+  ImagePlus,
+  ShieldCheck,
+  ShieldAlert,
 } from 'lucide-react';
 import type { TargetFormat } from '../types';
 
@@ -25,6 +28,7 @@ interface ConvertedFile {
   downloadUrl: string;
   finalName: string;
   timestamp: string;
+  epubValid: boolean | null;
 }
 
 interface FileProgress {
@@ -67,15 +71,39 @@ function formatBytes(bytes: number): string {
  * Upload + convert a single file. Uses XHR (rather than fetch) so the upload
  * phase reports real byte progress for the per-file progress bar.
  */
+export interface EpubDetails {
+  author: string;
+  language: string;
+  publisher: string;
+  isbn: string;
+  series: string;
+  cover: File | null;
+}
+
+interface ConversionResult {
+  blob: Blob;
+  /** Structural EPUB check reported by the server, when the target was EPUB. */
+  epubValid: boolean | null;
+}
+
 function convertFile(
   file: File,
   targetFormat: string,
+  epub: EpubDetails | null,
   onProgress: (percent: number) => void,
-): Promise<Blob> {
+): Promise<ConversionResult> {
   return new Promise((resolve, reject) => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('targetFormat', targetFormat);
+    if (epub) {
+      formData.append('author', epub.author);
+      formData.append('language', epub.language);
+      formData.append('publisher', epub.publisher);
+      formData.append('isbn', epub.isbn);
+      formData.append('series', epub.series);
+      if (epub.cover) formData.append('coverImage', epub.cover);
+    }
 
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/book/convert');
@@ -93,7 +121,8 @@ function convertFile(
     xhr.onload = async () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         onProgress(100);
-        resolve(xhr.response as Blob);
+        const header = xhr.getResponseHeader('X-Epub-Valid');
+        resolve({ blob: xhr.response as Blob, epubValid: header === null ? null : header === 'true' });
         return;
       }
       let message = `Failed to convert ${file.name} (HTTP ${xhr.status})`;
@@ -123,6 +152,16 @@ export default function ConverterPanel() {
   const [fileProgress, setFileProgress] = useState<FileProgress[]>([]);
   const [currentConvertIdx, setCurrentConvertIdx] = useState(-1);
   const [isZipping, setIsZipping] = useState(false);
+  const [showEpubOptions, setShowEpubOptions] = useState(false);
+  const [epubDetails, setEpubDetails] = useState<EpubDetails>({
+    author: '',
+    language: 'en',
+    publisher: '',
+    isbn: '',
+    series: '',
+    cover: null,
+  });
+  const coverInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const emptyInputRef = useRef<HTMLInputElement>(null);
 
@@ -220,7 +259,12 @@ export default function ConverterPanel() {
       updateProgress(i, { status: 'converting', percent: 5 });
 
       try {
-        const blob = await convertFile(f, targetFormat, (percent) => updateProgress(i, { percent }));
+        const { blob, epubValid } = await convertFile(
+          f,
+          targetFormat,
+          targetFormat === 'epub' ? epubDetails : null,
+          (percent) => updateProgress(i, { percent }),
+        );
         const downloadUrl = URL.createObjectURL(blob);
         objectUrlsRef.current.push(downloadUrl);
 
@@ -243,6 +287,7 @@ export default function ConverterPanel() {
               minute: '2-digit',
               second: '2-digit',
             }),
+            epubValid,
           },
           ...prev,
         ]);
@@ -513,6 +558,96 @@ export default function ConverterPanel() {
                 </div>
               </div>
 
+              {targetFormat === 'epub' && (
+                <div className="border border-[#27272A] rounded-xl overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setShowEpubOptions((v) => !v)}
+                    className="w-full flex items-center justify-between px-3.5 py-2.5 bg-[#0D0D10] cursor-pointer"
+                  >
+                    <span className="text-[10px] uppercase font-mono font-bold text-[#71717A] tracking-wider">
+                      EPUB details {epubDetails.cover ? '· cover attached' : ''}
+                    </span>
+                    <span className="text-[10px] text-[#D4AF37]">{showEpubOptions ? 'Hide' : 'Edit'}</span>
+                  </button>
+                  {showEpubOptions && (
+                    <div className="p-3.5 space-y-3 bg-[#111114]">
+                      <div className="grid grid-cols-2 gap-3">
+                        <input
+                          value={epubDetails.author}
+                          onChange={(e) => setEpubDetails({ ...epubDetails, author: e.target.value })}
+                          placeholder="Author"
+                          aria-label="Author"
+                          className="w-full bg-[#0D0D10] border border-[#27272A] rounded-lg px-3 py-2 text-xs text-[#E4E4E7] placeholder-[#52525B] focus:outline-none focus:border-[#D4AF37]/60"
+                        />
+                        <input
+                          value={epubDetails.language}
+                          onChange={(e) => setEpubDetails({ ...epubDetails, language: e.target.value })}
+                          placeholder="Language (en)"
+                          aria-label="Language"
+                          className="w-full bg-[#0D0D10] border border-[#27272A] rounded-lg px-3 py-2 text-xs text-[#E4E4E7] placeholder-[#52525B] focus:outline-none focus:border-[#D4AF37]/60"
+                        />
+                        <input
+                          value={epubDetails.publisher}
+                          onChange={(e) => setEpubDetails({ ...epubDetails, publisher: e.target.value })}
+                          placeholder="Publisher"
+                          aria-label="Publisher"
+                          className="w-full bg-[#0D0D10] border border-[#27272A] rounded-lg px-3 py-2 text-xs text-[#E4E4E7] placeholder-[#52525B] focus:outline-none focus:border-[#D4AF37]/60"
+                        />
+                        <input
+                          value={epubDetails.isbn}
+                          onChange={(e) => setEpubDetails({ ...epubDetails, isbn: e.target.value })}
+                          placeholder="ISBN"
+                          aria-label="ISBN"
+                          className="w-full bg-[#0D0D10] border border-[#27272A] rounded-lg px-3 py-2 text-xs text-[#E4E4E7] placeholder-[#52525B] focus:outline-none focus:border-[#D4AF37]/60"
+                        />
+                      </div>
+                      <input
+                        value={epubDetails.series}
+                        onChange={(e) => setEpubDetails({ ...epubDetails, series: e.target.value })}
+                        placeholder="Series name (optional)"
+                        aria-label="Series"
+                        className="w-full bg-[#0D0D10] border border-[#27272A] rounded-lg px-3 py-2 text-xs text-[#E4E4E7] placeholder-[#52525B] focus:outline-none focus:border-[#D4AF37]/60"
+                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => coverInputRef.current?.click()}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#D4AF37] bg-[#D4AF37]/5 border border-[#D4AF37]/20 rounded-lg hover:bg-[#D4AF37]/10 transition cursor-pointer"
+                        >
+                          <ImagePlus className="w-3 h-3" /> {epubDetails.cover ? 'Change cover' : 'Add cover image'}
+                        </button>
+                        {epubDetails.cover && (
+                          <>
+                            <span className="text-[10px] text-zinc-400 font-mono truncate max-w-[160px]">
+                              {epubDetails.cover.name}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setEpubDetails({ ...epubDetails, cover: null })}
+                              className="text-[10px] text-zinc-500 hover:text-red-400 cursor-pointer"
+                            >
+                              Remove
+                            </button>
+                          </>
+                        )}
+                        <input
+                          ref={coverInputRef}
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          className="hidden"
+                          onChange={(e) => {
+                            const chosen = e.target.files?.[0] ?? null;
+                            setEpubDetails((prev) => ({ ...prev, cover: chosen }));
+                            e.target.value = '';
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <AnimatePresence mode="wait">
                 {status === 'converting' && (
                   <motion.div
@@ -642,6 +777,23 @@ export default function ConverterPanel() {
                         <h4 className="text-xs font-medium text-[#E4E4E7] truncate mt-1.5 leading-snug">
                           {item.finalName}
                         </h4>
+                        {item.epubValid !== null && (
+                          <span
+                            className={`inline-flex items-center gap-1 mt-1.5 text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded border ${
+                              item.epubValid
+                                ? 'text-emerald-400 bg-emerald-950/30 border-emerald-500/25'
+                                : 'text-amber-400 bg-amber-950/30 border-amber-500/25'
+                            }`}
+                            title={
+                              item.epubValid
+                                ? 'Passed the EPUB 3 structural check'
+                                : 'The structural check found problems in this package'
+                            }
+                          >
+                            {item.epubValid ? <ShieldCheck className="w-2.5 h-2.5" /> : <ShieldAlert className="w-2.5 h-2.5" />}
+                            {item.epubValid ? 'EPUB 3 valid' : 'Check failed'}
+                          </span>
+                        )}
                         <span className="text-[10px] text-[#71717A] font-mono block mt-0.5">
                           From {item.originalFormat.toUpperCase()} ({formatBytes(item.originalSize)}) →{' '}
                           {formatBytes(item.blob.size)}
