@@ -223,3 +223,66 @@ test('extractTextFromFile rejects a file whose bytes are not readable', async ()
     /not a readable/i,
   );
 });
+
+test('DOCX emphasis and headings survive a conversion', async () => {
+  const { htmlToBlocks, blocksToDocx, blocksToEpub, blocksToRtf, blockText, extractBlocksFromFile } =
+    require('../server-build/server.cjs');
+
+  const html = `<html><body>
+    <h1>Chapter 1: The Lighthouse</h1>
+    <p>The lamp was <strong>cold</strong> and the keeper was <em>gone</em>.</p>
+    <blockquote>Nothing burns forever.</blockquote>
+    <ul><li>First finding</li><li>Second finding</li></ul>
+    <hr/>
+    <h2>Later</h2>
+    <p>She climbed again.</p>
+  </body></html>`;
+
+  const blocks = htmlToBlocks(html);
+  const kinds = blocks.map((b) => b.type);
+  assert.deepEqual(kinds, ['heading', 'paragraph', 'quote', 'listItem', 'listItem', 'scene', 'heading', 'paragraph']);
+  assert.equal(blocks[0].level, 1);
+  assert.equal(blocks[6].level, 2);
+
+  const styled = blocks[1].runs;
+  assert.ok(styled.some((r) => r.text === 'cold' && r.bold), 'bold run preserved');
+  assert.ok(styled.some((r) => r.text === 'gone' && r.italic), 'italic run preserved');
+  assert.equal(blockText(blocks[1]), 'The lamp was cold and the keeper was gone.');
+
+  // DOCX keeps the emphasis in the XML.
+  const docx = await blocksToDocx(blocks, 'Styled');
+  const AdmZip = require('adm-zip');
+  const xml = new AdmZip(docx).readAsText('word/document.xml');
+  assert.match(xml, /<w:b\b/, 'bold run reaches the DOCX');
+  assert.match(xml, /<w:i\b/, 'italic run reaches the DOCX');
+
+  // Round trip back through the DOCX reader keeps the styling.
+  const reparsed = await extractBlocksFromFile(docx, 'styled.docx');
+  const flatRuns = reparsed.flatMap((b) => b.runs);
+  assert.ok(flatRuns.some((r) => r.bold && r.text.includes('cold')), 'bold survives the round trip');
+  assert.ok(flatRuns.some((r) => r.italic && r.text.includes('gone')), 'italic survives the round trip');
+
+  // EPUB keeps semantic tags rather than flattening to <p>.
+  const epub = new AdmZip(blocksToEpub(blocks, 'Styled', 'Tester'));
+  const chapter = epub.readAsText('OEBPS/chapter1.xhtml');
+  assert.match(chapter, /<strong>cold<\/strong>/);
+  assert.match(chapter, /<em>gone<\/em>/);
+  assert.match(chapter, /<blockquote>/);
+  assert.match(chapter, /<li>First finding<\/li>/);
+  assert.match(chapter, /<hr class="scene"\/>/);
+  // An h2 is a sub-heading inside the chapter, not a new chapter file.
+  assert.match(chapter, /<h2>Later<\/h2>/);
+  assert.equal(epub.getEntries().filter((e) => /chapter\d+\.xhtml$/.test(e.entryName)).length, 1);
+
+  // RTF carries the same emphasis.
+  const rtf = blocksToRtf(blocks, 'Styled');
+  assert.match(rtf, /\\b cold\\b0/);
+  assert.match(rtf, /\\i gone\\i0/);
+});
+
+test('PDF renders styled runs without throwing', async () => {
+  const { htmlToBlocks, blocksToPdf } = require('../server-build/server.cjs');
+  const blocks = htmlToBlocks('<p>Plain <strong>bold</strong> and <em>italic</em> and <strong><em>both</em></strong>.</p>');
+  const pdf = await blocksToPdf(blocks, 'Styled');
+  assert.equal(pdf.subarray(0, 5).toString('ascii'), '%PDF-');
+});

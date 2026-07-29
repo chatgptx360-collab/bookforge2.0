@@ -312,6 +312,184 @@ function escapeXml(value: string): string {
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
 }
 
+// ---------------------------------------------------------------------------
+// Rich block model — the intermediate every converter reads and writes, so
+// emphasis and heading levels survive a conversion instead of being flattened.
+// ---------------------------------------------------------------------------
+
+export interface RichRun {
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+}
+
+export type RichBlockType = 'heading' | 'paragraph' | 'quote' | 'listItem' | 'scene';
+
+export interface RichBlock {
+  type: RichBlockType;
+  /** 1-6 for headings. */
+  level?: number;
+  runs: RichRun[];
+}
+
+const BLOCK_MARK = '\u0010';
+const BOLD_ON = '\u0011';
+const BOLD_OFF = '\u0012';
+const ITALIC_ON = '\u0013';
+const ITALIC_OFF = '\u0014';
+
+export function blockText(block: RichBlock): string {
+  return block.runs.map((run) => run.text).join('');
+}
+
+function makeBlock(type: RichBlockType, runs: RichRun[], level?: number): RichBlock {
+  return level === undefined ? { type, runs } : { type, level, runs };
+}
+
+/** Parses inline bold/italic markers into styled runs. */
+function markersToRuns(input: string): RichRun[] {
+  const runs: RichRun[] = [];
+  let bold = 0;
+  let italic = 0;
+  let buffer = '';
+
+  const push = () => {
+    if (!buffer) return;
+    const run: RichRun = { text: buffer };
+    if (bold > 0) run.bold = true;
+    if (italic > 0) run.italic = true;
+    runs.push(run);
+    buffer = '';
+  };
+
+  for (const char of input) {
+    switch (char) {
+      case BOLD_ON:
+        push();
+        bold++;
+        break;
+      case BOLD_OFF:
+        push();
+        bold = Math.max(0, bold - 1);
+        break;
+      case ITALIC_ON:
+        push();
+        italic++;
+        break;
+      case ITALIC_OFF:
+        push();
+        italic = Math.max(0, italic - 1);
+        break;
+      default:
+        buffer += char;
+    }
+  }
+  push();
+
+  // Merge neighbours that ended up with identical styling.
+  return runs.reduce<RichRun[]>((acc, run) => {
+    const last = acc.at(-1);
+    if (last && Boolean(last.bold) === Boolean(run.bold) && Boolean(last.italic) === Boolean(run.italic)) {
+      last.text += run.text;
+      return acc;
+    }
+    acc.push(run);
+    return acc;
+  }, []);
+}
+
+/** Converts an (X)HTML fragment into styled blocks. */
+export function htmlToBlocks(html: string): RichBlock[] {
+  const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  let text = bodyMatch ? bodyMatch[1] : html;
+
+  text = text
+    .replace(/<(script|style|head)[^>]*>[\s\S]*?<\/\1>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(strong|b)\b[^>]*>/gi, BOLD_ON)
+    .replace(/<\/(strong|b)>/gi, BOLD_OFF)
+    .replace(/<(em|i|cite)\b[^>]*>/gi, ITALIC_ON)
+    .replace(/<\/(em|i|cite)>/gi, ITALIC_OFF)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<hr\b[^>]*\/?>/gi, `${BLOCK_MARK}scene${BLOCK_MARK}${BLOCK_MARK}/${BLOCK_MARK}`)
+    .replace(/<(h[1-6]|p|li|blockquote)\b[^>]*>/gi, (_, tag: string) => `${BLOCK_MARK}${tag.toLowerCase()}${BLOCK_MARK}`)
+    .replace(/<\/(h[1-6]|p|li|blockquote)>/gi, `${BLOCK_MARK}/${BLOCK_MARK}`)
+    .replace(/<[^>]+>/g, '');
+
+  const blocks: RichBlock[] = [];
+  const tokens = text.split(BLOCK_MARK);
+  let pending: RichBlockType | null = null;
+  let level: number | undefined;
+
+  const flush = (content: string) => {
+    const cleaned = decodeHtmlEntities(content).replace(/[ \t ]+/g, ' ').trim();
+    if (!pending) {
+      // Loose text outside any block element still counts as a paragraph.
+      if (cleaned) blocks.push(makeBlock('paragraph', markersToRuns(cleaned)));
+      return;
+    }
+    if (pending === 'scene') {
+      blocks.push(makeBlock('scene', []));
+    } else if (cleaned) {
+      blocks.push(makeBlock(pending, markersToRuns(cleaned), level));
+    }
+    pending = null;
+    level = undefined;
+  };
+
+  for (const token of tokens) {
+    const tag = token.toLowerCase();
+    if (/^h[1-6]$/.test(tag)) {
+      pending = 'heading';
+      level = Number(tag[1]);
+    } else if (tag === 'p') {
+      pending = 'paragraph';
+    } else if (tag === 'li') {
+      pending = 'listItem';
+    } else if (tag === 'blockquote') {
+      pending = 'quote';
+    } else if (tag === 'scene') {
+      pending = 'scene';
+    } else if (tag === '/') {
+      if (pending === 'scene') flush('');
+    } else {
+      flush(token);
+    }
+  }
+
+  return blocks.filter((block) => block.type === 'scene' || blockText(block).trim());
+}
+
+const TEXT_SCENE_BREAK = /^(\*\s*\*\s*\*|\*{3,}|-{3,}|—{3,}|❦)$/;
+
+/** Builds blocks from plain text, recognising headings and scene breaks. */
+export function textToBlocks(text: string): RichBlock[] {
+  const blocks: RichBlock[] = [];
+  for (const rawLine of text.replace(/\r\n?/g, '\n').split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (TEXT_SCENE_BREAK.test(line)) {
+      blocks.push(makeBlock('scene', []));
+      continue;
+    }
+    const heading = headingInfo(line);
+    if (heading) {
+      blocks.push(makeBlock('heading', [{ text: heading.title }], 1));
+      continue;
+    }
+    blocks.push(makeBlock('paragraph', [{ text: line }]));
+  }
+  return blocks;
+}
+
+export function blocksToPlainText(blocks: RichBlock[]): string {
+  return blocks
+    .map((block) => (block.type === 'scene' ? '***' : block.type === 'listItem' ? `• ${blockText(block)}` : blockText(block)))
+    .join('\n\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 /** Converts an (X)HTML fragment into readable plain text with paragraph breaks. */
 function htmlToPlainText(html: string): string {
   const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
@@ -556,7 +734,8 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
 }
 
 /** Reads an EPUB in spine order and returns its prose as plain text. */
-export function extractEpubText(buffer: Buffer): string {
+/** Returns each EPUB content document, in spine order, as raw XHTML. */
+function epubDocuments(buffer: Buffer): string[] {
   const zip = new AdmZip(buffer);
   assertSafeZip(zip);
   const readEntry = (entryPath: string): string | null => {
@@ -601,33 +780,55 @@ export function extractEpubText(buffer: Buffer): string {
   const parts: string[] = [];
   for (const href of documents) {
     const raw = readEntry(spineIds.length > 0 ? resolve(href) : href);
-    if (!raw) continue;
-    const text = htmlToPlainText(raw);
-    if (text) parts.push(text);
+    if (raw) parts.push(raw);
   }
+  return parts;
+}
 
+export function extractEpubText(buffer: Buffer): string {
+  const parts = epubDocuments(buffer)
+    .map((doc) => htmlToPlainText(doc))
+    .filter(Boolean);
   if (parts.length === 0) throw new Error('This EPUB contains no readable text content.');
   return parts.join('\n\n');
 }
 
-export async function extractTextFromFile(buffer: Buffer, fileName: string): Promise<string> {
+/** Reads an EPUB in spine order and returns styled blocks. */
+export function extractEpubBlocks(buffer: Buffer): RichBlock[] {
+  return epubDocuments(buffer).flatMap((doc) => htmlToBlocks(doc));
+}
+
+/**
+ * Extracts a document as styled blocks. DOCX and EPUB keep their emphasis and
+ * heading levels; the plain-text formats are promoted to blocks by detecting
+ * headings and scene breaks.
+ */
+export async function extractBlocksFromFile(buffer: Buffer, fileName: string): Promise<RichBlock[]> {
   const format = resolveSourceFormat(buffer, fileName);
 
   switch (format) {
     case 'docx': {
-      const { value } = await mammoth.extractRawText({ buffer });
-      return value.trim();
+      const { value } = await mammoth.convertToHtml({ buffer });
+      const blocks = htmlToBlocks(value);
+      return blocks.length > 0 ? blocks : textToBlocks((await mammoth.extractRawText({ buffer })).value);
+    }
+    case 'epub': {
+      const blocks = extractEpubBlocks(buffer);
+      if (blocks.length === 0) throw new Error('This EPUB contains no readable text content.');
+      return blocks;
     }
     case 'pdf':
-      return (await extractPdfText(buffer)).trim();
-    case 'epub':
-      return extractEpubText(buffer).trim();
+      return textToBlocks(await extractPdfText(buffer));
     case 'rtf':
-      return parseRtfToText(buffer.toString('utf8'));
+      return textToBlocks(parseRtfToText(buffer.toString('utf8')));
     case 'txt':
     default:
-      return buffer.toString('utf8').replace(/\r\n?/g, '\n').trim();
+      return textToBlocks(buffer.toString('utf8'));
   }
+}
+
+export async function extractTextFromFile(buffer: Buffer, fileName: string): Promise<string> {
+  return blocksToPlainText(await extractBlocksFromFile(buffer, fileName));
 }
 
 // ---------------------------------------------------------------------------
@@ -953,30 +1154,53 @@ nav ol { list-style: none; padding-left: 0; line-height: 2; }
 
 interface EpubChapter {
   title: string;
-  body: string;
+  blocks: RichBlock[];
 }
 
-/** Splits plain text into chapters for EPUB/DOCX generation. */
-function splitIntoChapters(text: string, fallbackTitle: string): EpubChapter[] {
-  const structure = parseDocumentStructure(text);
-  const chapters = structure.sections
-    .filter((section) => section.type === 'chapter')
-    .map((section) => ({ title: section.title, body: section.content }));
+/** Splits a block stream into chapters at top-level headings. */
+function groupBlocksIntoChapters(blocks: RichBlock[], fallbackTitle: string): EpubChapter[] {
+  const chapters: EpubChapter[] = [];
+  let current: EpubChapter | null = null;
 
-  if (chapters.length > 0) return chapters;
-  return [{ title: fallbackTitle, body: text }];
+  // Split at the top heading level present: h1 when the document has them,
+  // otherwise h2. Anything deeper stays inside the chapter as a sub-heading.
+  const splitLevel = blocks.some((block) => block.type === 'heading' && (block.level ?? 1) === 1) ? 1 : 2;
+
+  for (const block of blocks) {
+    if (block.type === 'heading' && (block.level ?? 1) <= splitLevel) {
+      current = { title: blockText(block) || fallbackTitle, blocks: [] };
+      chapters.push(current);
+      continue;
+    }
+    if (!current) {
+      current = { title: fallbackTitle, blocks: [] };
+      chapters.push(current);
+    }
+    current.blocks.push(block);
+  }
+
+  const withContent = chapters.filter((chapter) => chapter.blocks.length > 0);
+  return withContent.length > 0 ? withContent : [{ title: fallbackTitle, blocks }];
+}
+
+function runsToXhtml(runs: RichRun[]): string {
+  return runs
+    .map((run) => {
+      let html = escapeXml(run.text);
+      if (run.italic) html = `<em>${html}</em>`;
+      if (run.bold) html = `<strong>${html}</strong>`;
+      return html;
+    })
+    .join('');
 }
 
 /**
  * Builds a valid EPUB 3.0 package: no NCX, a proper `nav.xhtml` carrying
  * `epub:type="toc"`, a stylesheet, and an uncompressed leading mimetype entry.
+ * Inline emphasis and heading levels from the source survive into the output.
  */
-export function convertTextToEpub(
-  text: string,
-  title = 'Converted Book',
-  author = 'BookForge',
-): Buffer {
-  const chapters = splitIntoChapters(text, title);
+export function blocksToEpub(blocks: RichBlock[], title = 'Converted Book', author = 'BookForge'): Buffer {
+  const chapters = groupBlocksIntoChapters(blocks, title);
   const bookId = `urn:uuid:${crypto.randomUUID()}`;
   const modified = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
@@ -987,18 +1211,17 @@ export function convertTextToEpub(
   ];
   const spine: string[] = ['    <itemref idref="titlepage"/>'];
   const navItems: string[] = [];
-
   const documents: ZipEntry[] = [];
 
   const titlePage = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en" lang="en">
   <head>
     <title>${escapeXml(title)}</title>
     <link rel="stylesheet" type="text/css" href="stylesheet.css"/>
   </head>
   <body>
-    <section class="title-page" epub:type="titlepage" xmlns:epub="http://www.idpf.org/2007/ops">
+    <section class="title-page" epub:type="titlepage">
       <h1>${escapeXml(title)}</h1>
       <p class="author">${escapeXml(author)}</p>
     </section>
@@ -1009,14 +1232,38 @@ export function convertTextToEpub(
   chapters.forEach((chapter, index) => {
     const id = `ch${index + 1}`;
     const fileName = `chapter${index + 1}.xhtml`;
-    const paragraphs = chapter.body.split(/\n+/).map((p) => p.trim()).filter(Boolean);
-    const bodyHtml = (paragraphs.length > 0 ? paragraphs : [chapter.body.trim()])
-      .map((paragraph, pIndex) =>
-        /^(\*\s*\*\s*\*|\*\*\*|-{3,})$/.test(paragraph)
-          ? '    <hr class="scene"/>'
-          : `    <p${pIndex === 0 ? ' class="first"' : ''}>${escapeXml(paragraph)}</p>`,
-      )
-      .join('\n');
+
+    const lines: string[] = [];
+    let listOpen = false;
+    let firstParagraph = true;
+
+    for (const block of chapter.blocks) {
+      if (block.type !== 'listItem' && listOpen) {
+        lines.push('    </ul>');
+        listOpen = false;
+      }
+      if (block.type === 'scene') {
+        lines.push('    <hr class="scene"/>');
+        firstParagraph = true;
+      } else if (block.type === 'heading') {
+        const level = Math.min(6, Math.max(2, block.level ?? 2));
+        lines.push(`    <h${level}>${runsToXhtml(block.runs)}</h${level}>`);
+        firstParagraph = true;
+      } else if (block.type === 'quote') {
+        lines.push(`    <blockquote><p>${runsToXhtml(block.runs)}</p></blockquote>`);
+        firstParagraph = true;
+      } else if (block.type === 'listItem') {
+        if (!listOpen) {
+          lines.push('    <ul>');
+          listOpen = true;
+        }
+        lines.push(`      <li>${runsToXhtml(block.runs)}</li>`);
+      } else {
+        lines.push(`    <p${firstParagraph ? ' class="first"' : ''}>${runsToXhtml(block.runs)}</p>`);
+        firstParagraph = false;
+      }
+    }
+    if (listOpen) lines.push('    </ul>');
 
     const xhtml = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
@@ -1027,7 +1274,7 @@ export function convertTextToEpub(
   </head>
   <body>
     <h1>${escapeXml(chapter.title)}</h1>
-${bodyHtml}
+${lines.join('\n')}
   </body>
 </html>`;
 
@@ -1102,6 +1349,10 @@ ${spine.join('\n')}
   ]);
 }
 
+export function convertTextToEpub(text: string, title = 'Converted Book', author = 'BookForge'): Buffer {
+  return blocksToEpub(textToBlocks(text), title, author);
+}
+
 const WINANSI_SUBSTITUTIONS: Record<string, string> = {
   '\u2018': "'", '\u2019': "'", '\u201A': ',', '\u201B': "'",
   '\u201C': '"', '\u201D': '"', '\u201E': '"',
@@ -1123,89 +1374,169 @@ function sanitizeForStandardFont(text: string): string {
     .replace(/[^\n\t\x20-\x7E\u00A0-\u00FF\u20AC\u201A\u0192\u2020\u2021\u02C6\u2030\u0160\u0152\u017D\u2122\u0161\u0153\u017E\u0178]/g, '');
 }
 
-export async function convertTextToPdf(text: string, title = 'Converted Document'): Promise<Buffer> {
+interface StyledWord {
+  text: string;
+  bold: boolean;
+  italic: boolean;
+}
+
+function runsToWords(runs: RichRun[]): StyledWord[] {
+  const words: StyledWord[] = [];
+  for (const run of runs) {
+    for (const word of sanitizeForStandardFont(run.text).split(/\s+/)) {
+      if (word) words.push({ text: word, bold: Boolean(run.bold), italic: Boolean(run.italic) });
+    }
+  }
+  return words;
+}
+
+/** Typesets styled blocks onto A4 pages, preserving inline bold and italics. */
+export async function blocksToPdf(blocks: RichBlock[], title = 'Converted Document'): Promise<Buffer> {
   const pdfDoc = await PDFDocument.create();
   pdfDoc.setTitle(title);
   pdfDoc.setProducer('BookForge');
 
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const fonts = {
+    regular: await pdfDoc.embedFont(StandardFonts.TimesRoman),
+    bold: await pdfDoc.embedFont(StandardFonts.TimesRomanBold),
+    italic: await pdfDoc.embedFont(StandardFonts.TimesRomanItalic),
+    boldItalic: await pdfDoc.embedFont(StandardFonts.TimesRomanBoldItalic),
+  };
+  const fontFor = (word: StyledWord) =>
+    word.bold && word.italic ? fonts.boldItalic : word.bold ? fonts.bold : word.italic ? fonts.italic : fonts.regular;
 
   const pageSize: [number, number] = [595.276, 841.89]; // A4
-  const margin = 56;
-  const fontSize = 11;
-  const leading = 15.5;
+  const margin = 62;
+  const bodySize = 11.5;
+  const leading = 16.5;
   const maxWidth = pageSize[0] - margin * 2;
 
   let page = pdfDoc.addPage(pageSize);
   let y = pageSize[1] - margin;
+  let pageNumber = 1;
+
+  const stampFooter = () => {
+    const label = String(pageNumber);
+    const width = fonts.regular.widthOfTextAtSize(label, 9);
+    page.drawText(label, {
+      x: (pageSize[0] - width) / 2,
+      y: margin / 2,
+      size: 9,
+      font: fonts.regular,
+      color: rgb(0.45, 0.45, 0.45),
+    });
+  };
 
   const newPage = () => {
+    stampFooter();
     page = pdfDoc.addPage(pageSize);
+    pageNumber++;
     y = pageSize[1] - margin;
   };
 
-  const drawLine = (line: string, size: number, lineFont: typeof font) => {
-    if (y < margin + leading) newPage();
-    page.drawText(line, { x: margin, y, size, font: lineFont, color: rgb(0.1, 0.1, 0.1) });
-    y -= size >= 14 ? size + 8 : leading;
-  };
+  /** Greedy word wrap that measures every word in its own font. */
+  const layout = (words: StyledWord[], size: number, indentFirst: number): StyledWord[][] => {
+    const lines: StyledWord[][] = [];
+    let line: StyledWord[] = [];
+    let width = indentFirst;
+    const spaceWidth = fonts.regular.widthOfTextAtSize(' ', size);
 
-  const wrap = (input: string, size: number, wrapFont: typeof font): string[] => {
-    const words = input.split(/\s+/).filter(Boolean);
-    const lines: string[] = [];
-    let current = '';
     for (const word of words) {
-      const candidate = current ? `${current} ${word}` : word;
-      if (wrapFont.widthOfTextAtSize(candidate, size) > maxWidth && current) {
-        lines.push(current);
-        current = word;
-      } else if (wrapFont.widthOfTextAtSize(candidate, size) > maxWidth) {
-        // A single word longer than the line: hard-split it.
-        let chunk = '';
-        for (const char of candidate) {
-          if (wrapFont.widthOfTextAtSize(chunk + char, size) > maxWidth) {
-            lines.push(chunk);
-            chunk = char;
-          } else {
-            chunk += char;
-          }
-        }
-        current = chunk;
+      const wordWidth = fontFor(word).widthOfTextAtSize(word.text, size);
+      const needed = line.length === 0 ? width + wordWidth : width + spaceWidth + wordWidth;
+      if (needed > maxWidth && line.length > 0) {
+        lines.push(line);
+        line = [word];
+        width = wordWidth;
       } else {
-        current = candidate;
+        line.push(word);
+        width = needed;
       }
     }
-    if (current) lines.push(current);
+    if (line.length > 0) lines.push(line);
     return lines;
   };
 
-  for (const line of wrap(sanitizeForStandardFont(title), 16, boldFont)) {
-    drawLine(line, 16, boldFont);
-  }
-  y -= 14;
+  const drawLine = (words: StyledWord[], size: number, startX: number, align: 'left' | 'center') => {
+    if (y < margin + leading) newPage();
+    const spaceWidth = fonts.regular.widthOfTextAtSize(' ', size);
+    const lineWidth =
+      words.reduce((sum, word) => sum + fontFor(word).widthOfTextAtSize(word.text, size), 0) +
+      spaceWidth * Math.max(0, words.length - 1);
+    let x = align === 'center' ? (pageSize[0] - lineWidth) / 2 : startX;
 
-  for (const rawParagraph of sanitizeForStandardFont(text).split('\n')) {
-    const paragraph = rawParagraph.trim();
-    if (!paragraph) {
-      y -= 8;
-      continue;
+    for (const word of words) {
+      page.drawText(word.text, { x, y, size, font: fontFor(word), color: rgb(0.1, 0.1, 0.1) });
+      x += fontFor(word).widthOfTextAtSize(word.text, size) + spaceWidth;
     }
-    const heading = headingInfo(paragraph);
-    if (heading) {
-      y -= 12;
-      for (const line of wrap(heading.title, 13, boldFont)) drawLine(line, 13, boldFont);
-      y -= 4;
-      continue;
-    }
-    for (const line of wrap(paragraph, fontSize, font)) drawLine(line, fontSize, font);
-    y -= 6;
+    y -= size >= 14 ? size + 8 : leading;
+  };
+
+  for (const line of layout([{ text: sanitizeForStandardFont(title), bold: true, italic: false }], 18, 0)) {
+    drawLine(line, 18, margin, 'center');
   }
+  y -= 18;
+
+  let firstParagraph = true;
+  for (const block of blocks) {
+    if (block.type === 'scene') {
+      y -= 10;
+      drawLine([{ text: '* * *', bold: false, italic: false }], bodySize, margin, 'center');
+      y -= 6;
+      firstParagraph = true;
+    } else if (block.type === 'heading') {
+      const size = (block.level ?? 1) <= 1 ? 15 : 13;
+      y -= 16;
+      if (y < margin + leading * 3) newPage();
+      for (const line of layout(runsToWords(block.runs).map((word) => ({ ...word, bold: true })), size, 0)) {
+        drawLine(line, size, margin, 'center');
+      }
+      y -= 8;
+      firstParagraph = true;
+    } else if (block.type === 'quote') {
+      const words = runsToWords(block.runs).map((word) => ({ ...word, italic: true }));
+      for (const line of layout(words, bodySize, 24)) drawLine(line, bodySize, margin + 24, 'left');
+      y -= 6;
+      firstParagraph = true;
+    } else if (block.type === 'listItem') {
+      const words: StyledWord[] = [{ text: '*', bold: false, italic: false }, ...runsToWords(block.runs)];
+      for (const line of layout(words, bodySize, 18)) drawLine(line, bodySize, margin + 18, 'left');
+      firstParagraph = true;
+    } else {
+      const words = runsToWords(block.runs);
+      if (words.length === 0) continue;
+      const indent = firstParagraph ? 0 : 22;
+      const lines = layout(words, bodySize, indent);
+      lines.forEach((line, index) => drawLine(line, bodySize, margin + (index === 0 ? indent : 0), 'left'));
+      y -= 4;
+      firstParagraph = false;
+    }
+  }
+  stampFooter();
 
   return Buffer.from(await pdfDoc.save());
 }
 
-export async function convertTextToDocx(text: string, title = 'Converted Document'): Promise<Buffer> {
+export async function convertTextToPdf(text: string, title = 'Converted Document'): Promise<Buffer> {
+  return blocksToPdf(textToBlocks(text), title);
+}
+
+function runsToTextRuns(runs: RichRun[], size: number, extra: { color?: string; italics?: boolean } = {}) {
+  return runs.map(
+    (run) =>
+      new TextRun({
+        text: run.text,
+        font: 'Georgia',
+        size,
+        bold: run.bold,
+        italics: run.italic || extra.italics,
+        color: extra.color,
+      }),
+  );
+}
+
+/** Builds a DOCX from styled blocks, keeping emphasis and heading levels. */
+export async function blocksToDocx(blocks: RichBlock[], title = 'Converted Document'): Promise<Buffer> {
   const children: Paragraph[] = [
     new Paragraph({
       alignment: AlignmentType.CENTER,
@@ -1214,35 +1545,63 @@ export async function convertTextToDocx(text: string, title = 'Converted Documen
     }),
   ];
 
-  let firstOfSection = true;
-  for (const rawLine of text.replace(/\r\n?/g, '\n').split('\n')) {
-    const line = rawLine.trim();
-    if (!line) continue;
-
-    const heading = headingInfo(line);
-    if (heading) {
+  let firstParagraph = true;
+  for (const block of blocks) {
+    if (block.type === 'scene') {
       children.push(
         new Paragraph({
           alignment: AlignmentType.CENTER,
-          pageBreakBefore: true,
-          spacing: { before: 240, after: 360 },
-          heading: HeadingLevel.HEADING_1,
-          children: [new TextRun({ text: heading.title, font: 'Georgia', size: 30, bold: true })],
+          spacing: { before: 240, after: 240 },
+          children: [new TextRun({ text: '❦', font: 'Georgia', size: 24, color: '888888' })],
         }),
       );
-      firstOfSection = true;
-      continue;
+      firstParagraph = true;
+    } else if (block.type === 'heading') {
+      const level = block.level ?? 1;
+      children.push(
+        new Paragraph({
+          alignment: level <= 1 ? AlignmentType.CENTER : AlignmentType.LEFT,
+          pageBreakBefore: level <= 1,
+          spacing: { before: level <= 1 ? 240 : 300, after: level <= 1 ? 360 : 160 },
+          heading:
+            level <= 1 ? HeadingLevel.HEADING_1 : level === 2 ? HeadingLevel.HEADING_2 : HeadingLevel.HEADING_3,
+          children: runsToTextRuns(
+            block.runs.map((run) => ({ ...run, bold: true })),
+            level <= 1 ? 30 : 24,
+          ),
+        }),
+      );
+      firstParagraph = true;
+    } else if (block.type === 'quote') {
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.JUSTIFIED,
+          indent: { left: 720, right: 720 },
+          spacing: { line: 360, after: 180 },
+          children: runsToTextRuns(block.runs, 22, { italics: true, color: '444444' }),
+        }),
+      );
+      firstParagraph = true;
+    } else if (block.type === 'listItem') {
+      children.push(
+        new Paragraph({
+          bullet: { level: 0 },
+          spacing: { line: 320, after: 80 },
+          children: runsToTextRuns(block.runs, 22),
+        }),
+      );
+      firstParagraph = true;
+    } else {
+      children.push(
+        new Paragraph({
+          alignment: AlignmentType.JUSTIFIED,
+          indent: { firstLine: firstParagraph ? 0 : 360 },
+          spacing: { line: 360, after: 120 },
+          children: runsToTextRuns(block.runs, 22),
+        }),
+      );
+      firstParagraph = false;
     }
-
-    children.push(
-      new Paragraph({
-        alignment: AlignmentType.JUSTIFIED,
-        indent: { firstLine: firstOfSection ? 0 : 360 },
-        spacing: { line: 360, after: 120 },
-        children: [new TextRun({ text: line, font: 'Georgia', size: 22 })],
-      }),
-    );
-    firstOfSection = false;
   }
 
   const doc = new Document({
@@ -1259,34 +1618,56 @@ export async function convertTextToDocx(text: string, title = 'Converted Documen
   return Packer.toBuffer(doc);
 }
 
-export function convertTextToRtf(text: string, title = 'Converted Document'): string {
-  const escapeRtf = (value: string) =>
-    value
-      .replace(/\\/g, '\\\\')
-      .replace(/\{/g, '\\{')
-      .replace(/\}/g, '\\}')
-      // Escape non-ASCII as \uN? so readers do not mangle typographic characters.
-      .replace(/[\u0080-\uFFFF]/g, (char) => `\\u${char.charCodeAt(0)}?`);
+export async function convertTextToDocx(text: string, title = 'Converted Document'): Promise<Buffer> {
+  return blocksToDocx(textToBlocks(text), title);
+}
 
-  const paragraphs = text
-    .replace(/\r\n?/g, '\n')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const heading = headingInfo(line);
-      return heading
-        ? `\\pard\\sa240\\sb240\\qc\\b\\fs28 ${escapeRtf(heading.title)}\\b0\\par`
-        : `\\pard\\sa200\\sl276\\slmult1\\fi360\\qj\\fs22 ${escapeRtf(line)}\\par`;
-    });
+function escapeRtf(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/\{/g, '\\{')
+    .replace(/\}/g, '\\}')
+    // Escape non-ASCII as \uN? so readers do not mangle typographic characters.
+    .replace(/[-￿]/g, (char) => `\\u${char.charCodeAt(0)}?`);
+}
+
+function runsToRtf(runs: RichRun[]): string {
+  return runs
+    .map((run) => {
+      const open = `${run.bold ? '\\b ' : ''}${run.italic ? '\\i ' : ''}`;
+      const close = `${run.italic ? '\\i0 ' : ''}${run.bold ? '\\b0 ' : ''}`;
+      return `${open}${escapeRtf(run.text)}${close}`;
+    })
+    .join('');
+}
+
+export function blocksToRtf(blocks: RichBlock[], title = 'Converted Document'): string {
+  const body = blocks.map((block) => {
+    if (block.type === 'scene') return '\\pard\\sa240\\sb240\\qc\\fs22 * * *\\par';
+    if (block.type === 'heading') {
+      const size = (block.level ?? 1) <= 1 ? 30 : 26;
+      return `\\pard\\sa240\\sb240\\qc\\b\\fs${size} ${escapeRtf(blockText(block))}\\b0\\par`;
+    }
+    if (block.type === 'quote') {
+      return `\\pard\\li720\\ri720\\sa200\\qj\\i\\fs22 ${escapeRtf(blockText(block))}\\i0\\par`;
+    }
+    if (block.type === 'listItem') {
+      return `\\pard\\li360\\sa120\\fs22 \\u8226? ${runsToRtf(block.runs)}\\par`;
+    }
+    return `\\pard\\sa200\\sl276\\slmult1\\fi360\\qj\\fs22 ${runsToRtf(block.runs)}\\par`;
+  });
 
   return [
     '{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\froman\\fcharset0 Georgia;}}',
     '\\viewkind4\\uc1',
     `\\pard\\sa240\\qc\\b\\fs36 ${escapeRtf(title)}\\b0\\par`,
-    ...paragraphs,
+    ...body,
     '}',
   ].join('\n');
+}
+
+export function convertTextToRtf(text: string, title = 'Converted Document'): string {
+  return blocksToRtf(textToBlocks(text), title);
 }
 
 /** Builds a DOCX from already-structured chapters (Reader & Editor export). */
@@ -1565,27 +1946,31 @@ app.post('/api/book/convert', upload.single('file'), async (req, res) => {
   }
 
   try {
-    const text = await extractTextFromFile(file.buffer, file.originalname);
+    // Conversion runs on the styled block model, so bold, italics and heading
+    // levels from a DOCX or EPUB survive into whatever comes out.
+    const blocks = await extractBlocksFromFile(file.buffer, file.originalname);
+    const text = blocksToPlainText(blocks);
     if (!text.trim()) {
       res.status(422).json({ error: 'No extractable text was found in this file.' });
       return;
     }
 
     const title = deriveTitle(text, file.originalname);
+    const author = String(req.body?.author ?? '').trim() || 'BookForge';
     const fileName = `${baseNameOf(file.originalname)}.${targetFormat}`;
 
     switch (targetFormat) {
       case 'docx':
-        sendDocument(res, await convertTextToDocx(text, title), fileName, targetFormat);
+        sendDocument(res, await blocksToDocx(blocks, title), fileName, targetFormat);
         return;
       case 'pdf':
-        sendDocument(res, await convertTextToPdf(text, title), fileName, targetFormat);
+        sendDocument(res, await blocksToPdf(blocks, title), fileName, targetFormat);
         return;
       case 'epub':
-        sendDocument(res, convertTextToEpub(text, title), fileName, targetFormat);
+        sendDocument(res, blocksToEpub(blocks, title, author), fileName, targetFormat);
         return;
       case 'rtf':
-        sendDocument(res, Buffer.from(convertTextToRtf(text, title), 'utf8'), fileName, targetFormat);
+        sendDocument(res, Buffer.from(blocksToRtf(blocks, title), 'utf8'), fileName, targetFormat);
         return;
       case 'txt':
       default:
