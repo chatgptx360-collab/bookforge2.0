@@ -206,6 +206,13 @@ starts in. Every section has a checkbox, with *Everything*, *Chapters only* and
 *Nothing* as shortcuts. Progress, packaging and the ZIP all count the selection
 rather than the file, and the selection is saved with the rest of the run.
 
+**Any section can be redone on its own.** A chapter can come out wrong — a
+mispronunciation, a clipped passage, or simply the wrong narrator decided after
+hearing it — and re-running the whole book to fix one of them is no answer.
+Every finished section carries a redo beside its download links, and a failed
+one carries a retry; either re-speaks that section alone, replaces its audio in
+place and leaves the rest of the book untouched.
+
 **A failed chapter does not end the run.** Chapters are narrated in order, and
 one that fails is marked and skipped; the rest continue and the failures can be
 retried afterwards. Download any chapter as WAV or MP3, or the whole book as a

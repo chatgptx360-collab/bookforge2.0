@@ -8,6 +8,7 @@ import {
   Pause,
   Play,
   RefreshCw,
+  RotateCcw,
   Upload,
 } from 'lucide-react';
 import VoicePicker, { useVoiceCatalogue, voiceLabel } from './tts/VoicePicker';
@@ -286,6 +287,48 @@ export default function AudiobookPanel() {
       return next;
     });
     void run();
+  };
+
+
+  /**
+   * Regenerate one section, keeping everything else.
+   *
+   * A chapter can come out wrong — a mispronunciation, a clipped passage, a
+   * voice changed after the fact — and until now the only remedy was to close
+   * the book and narrate all of it again.
+   */
+  const redoChapter = async (index: number) => {
+    if (runningRef.current) return;
+    runningRef.current = true;
+    setRunning(true);
+    setError(null);
+
+    setAudio((prev) => {
+      // The old clip is about to be replaced, so let its object URL go.
+      if (prev[index]?.url) URL.revokeObjectURL(prev[index].url!);
+      return { ...prev, [index]: { status: 'working' } };
+    });
+
+    try {
+      const { blob, seconds } = await speakChapter(chapters[index], index);
+      setAudio((prev) => ({
+        ...prev,
+        [index]: { status: 'done', blob, url: URL.createObjectURL(blob), seconds },
+      }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'That section failed.';
+      // Stopping mid-redo leaves the section as it was before: not done, not
+      // broken, just waiting.
+      setAudio((prev) => ({
+        ...prev,
+        [index]: message === 'Stopped.' ? { status: 'pending' } : { status: 'error', error: message },
+      }));
+      if (message !== 'Stopped.') setError(message);
+    } finally {
+      runningRef.current = false;
+      setRunning(false);
+      setStatus(null);
+    }
   };
 
   const downloadChapter = async (index: number, format: 'wav' | 'mp3') => {
@@ -673,10 +716,32 @@ export default function AudiobookPanel() {
                           >
                             mp3
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => redoChapter(index)}
+                            disabled={running}
+                            title={`Narrate "${section.title}" again`}
+                            aria-label={`Redo ${section.title}`}
+                            className="flex items-center gap-1 text-[9px] font-mono uppercase text-[#71717A] hover:text-[#D4AF37] cursor-pointer shrink-0 disabled:opacity-40 disabled:pointer-events-none"
+                          >
+                            <RotateCcw className="w-3 h-3" /> redo
+                          </button>
                         </div>
                       )}
                       {entry?.status === 'error' && (
-                        <p className="text-[10px] text-red-400 mt-1.5 font-mono truncate">{entry.error}</p>
+                        <div className="flex items-start gap-2 mt-1.5">
+                          <p className="text-[10px] text-red-400 font-mono flex-1 break-words">{entry.error}</p>
+                          <button
+                            type="button"
+                            onClick={() => redoChapter(index)}
+                            disabled={running}
+                            title={`Try "${section.title}" again`}
+                            aria-label={`Redo ${section.title}`}
+                            className="flex items-center gap-1 text-[9px] font-mono uppercase text-[#D4AF37] hover:underline cursor-pointer shrink-0 disabled:opacity-40 disabled:pointer-events-none"
+                          >
+                            <RotateCcw className="w-3 h-3" /> retry
+                          </button>
+                        </div>
                       )}
                     </div>
                   );
