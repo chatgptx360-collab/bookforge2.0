@@ -23,6 +23,7 @@ import {
   safeFileName,
   silence,
 } from '../utils/audio';
+import { planChunks, readJson, speak, SpeechError } from '../utils/speech';
 import type { ParsedDocument, ParsedSection } from '../types';
 
 const ACCEPTED = ['.docx', '.pdf', '.epub', '.txt', '.rtf'];
@@ -80,9 +81,9 @@ export default function AudiobookPanel() {
       const form = new FormData();
       form.append('file', file);
       const response = await fetch('/api/book/parse-file', { method: 'POST', body: form });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || 'Could not read the book.');
-      setDoc(payload as ParsedDocument);
+      const payload = await readJson(response);
+      if (!response.ok) throw new Error(String(payload.error ?? 'Could not read the book.'));
+      setDoc(payload as unknown as ParsedDocument);
       setFileName(file.name);
       releaseAudio();
     } catch (err) {
@@ -95,31 +96,27 @@ export default function AudiobookPanel() {
   const speakChapter = useCallback(
     async (section: ParsedSection, index: number) => {
       const body = announceChapters && section.title ? `${section.title}.\n\n${section.content}` : section.content;
-
-      const planned = await fetch('/api/tts/plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: body }),
-      });
-      const plan = await planned.json();
-      if (!planned.ok) throw new Error(plan.error || 'Could not plan this chapter.');
+      const chunks = await planChunks(body);
 
       const parts: Int16Array[] = [];
       let sampleRate = 24000;
 
-      for (let piece = 0; piece < plan.chunks.length; piece++) {
+      for (let piece = 0; piece < chunks.length; piece++) {
         if (!runningRef.current) throw new Error('Stopped.');
-        setStatus(`Chapter ${index + 1} of ${chapters.length} — part ${piece + 1}/${plan.chunks.length}`);
-        const response = await fetch('/api/tts/speak', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: plan.chunks[piece], voice, style }),
+        const where = `Chapter ${index + 1} of ${chapters.length} — part ${piece + 1}/${chunks.length}`;
+        setStatus(where);
+        const payload = await speak(chunks[piece], {
+          voice,
+          style,
+          shouldContinue: () => runningRef.current,
+          // A quota window is a wait, not a failure — say so rather than
+          // leaving the run looking stalled.
+          onThrottled: (secondsLeft) =>
+            setStatus(`${where} · rate limited, resuming in ${secondsLeft}s`),
         });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || 'Speech generation failed.');
         sampleRate = payload.sampleRate ?? sampleRate;
         parts.push(base64ToPcm(payload.audioBase64));
-        if (piece < plan.chunks.length - 1) parts.push(silence(0.4, sampleRate));
+        if (piece < chunks.length - 1) parts.push(silence(0.4, sampleRate));
       }
 
       const pcm = concatPcm([silence(0.3, sampleRate), ...parts, silence(0.8, sampleRate)]);
@@ -151,6 +148,17 @@ export default function AudiobookPanel() {
           const message = err instanceof Error ? err.message : 'Chapter failed.';
           if (message === 'Stopped.') break;
           setAudio((prev) => ({ ...prev, [index]: { status: 'error', error: message } }));
+
+          // A quota that survived every wait is exhausted for the day, not
+          // busy. Grinding through the remaining chapters would only fail them
+          // all; stop and keep what was finished.
+          if (err instanceof SpeechError && err.status === 429) {
+            setError(
+              `${message} The daily quota looks spent, so the run stopped here — everything narrated so far is kept. ` +
+                'Continue narrating when the quota resets, or raise the limit on your API key.',
+            );
+            break;
+          }
           setError(`${message} — the run continues; retry the failed chapters afterwards.`);
         }
       }
@@ -236,10 +244,17 @@ export default function AudiobookPanel() {
           Upload a manuscript, choose a narrator, and it is read chapter by chapter. Download each chapter or the
           whole book as WAV or MP3.
         </p>
-        {catalogue && !catalogue.available && (
-          <div className="mt-4 p-3 rounded-xl bg-amber-950/20 border border-amber-500/25 text-amber-300 text-[11px] leading-relaxed max-w-2xl">
-            Narration needs <code className="font-mono">GEMINI_API_KEY</code> set on the deployment.
+        {catalogue?.error ? (
+          <div className="mt-4 p-3 rounded-xl bg-red-950/20 border border-red-500/25 text-red-300 text-[11px] leading-relaxed max-w-2xl">
+            The voice list could not be loaded — {catalogue.error} Reload the page to try again.
           </div>
+        ) : (
+          catalogue &&
+          !catalogue.available && (
+            <div className="mt-4 p-3 rounded-xl bg-amber-950/20 border border-amber-500/25 text-amber-300 text-[11px] leading-relaxed max-w-2xl">
+              Narration needs <code className="font-mono">GEMINI_API_KEY</code> set on the deployment.
+            </div>
+          )
         )}
       </header>
 

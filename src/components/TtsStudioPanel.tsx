@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { AlertCircle, AudioLines, Download, Loader2, Sparkles, Square } from 'lucide-react';
 import VoicePicker, { useVoiceCatalogue } from './tts/VoicePicker';
+import { planChunks, speak } from '../utils/speech';
 import {
   base64ToPcm,
   concatPcm,
@@ -49,28 +50,20 @@ export default function TtsStudioPanel() {
     });
 
     try {
-      const planned = await fetch('/api/tts/plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      });
-      const plan = await planned.json();
-      if (!planned.ok) throw new Error(plan.error || 'Could not plan the passage.');
-
-      const chunks: string[] = plan.chunks;
+      const chunks = await planChunks(text);
       const parts: Int16Array[] = [];
       let sampleRate = 24000;
 
       for (let index = 0; index < chunks.length; index++) {
         if (cancelRef.current) break;
-        setBusy(`Speaking part ${index + 1} of ${chunks.length}…`);
-        const response = await fetch('/api/tts/speak', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: chunks[index], voice, style }),
+        const where = `Speaking part ${index + 1} of ${chunks.length}…`;
+        setBusy(where);
+        const payload = await speak(chunks[index], {
+          voice,
+          style,
+          shouldContinue: () => !cancelRef.current,
+          onThrottled: (secondsLeft) => setBusy(`Rate limited — resuming in ${secondsLeft}s`),
         });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || 'Speech generation failed.');
         sampleRate = payload.sampleRate ?? sampleRate;
         parts.push(base64ToPcm(payload.audioBase64));
         if (index < chunks.length - 1) parts.push(silence(0.35, sampleRate));
@@ -125,11 +118,18 @@ export default function TtsStudioPanel() {
         <p className="text-sm text-[#71717A] max-w-2xl mt-1 leading-relaxed">
           Paste any text, pick a voice, and generate speech. Download it as WAV for editing or MP3 for publishing.
         </p>
-        {catalogue && !catalogue.available && (
-          <div className="mt-4 p-3 rounded-xl bg-amber-950/20 border border-amber-500/25 text-amber-300 text-[11px] leading-relaxed max-w-2xl">
-            Speech needs <code className="font-mono">GEMINI_API_KEY</code> set on the deployment. The converter and
-            reader work without it.
+        {catalogue?.error ? (
+          <div className="mt-4 p-3 rounded-xl bg-red-950/20 border border-red-500/25 text-red-300 text-[11px] leading-relaxed max-w-2xl">
+            The voice list could not be loaded — {catalogue.error} Reload the page to try again.
           </div>
+        ) : (
+          catalogue &&
+          !catalogue.available && (
+            <div className="mt-4 p-3 rounded-xl bg-amber-950/20 border border-amber-500/25 text-amber-300 text-[11px] leading-relaxed max-w-2xl">
+              Speech needs <code className="font-mono">GEMINI_API_KEY</code> set on the deployment. The converter and
+              reader work without it.
+            </div>
+          )
         )}
       </header>
 

@@ -2403,41 +2403,106 @@ export interface TtsVoice {
   character: string;
   /** A rough guide for pickers: warm narrators vs bright, energetic reads. */
   timbre: 'warm' | 'bright' | 'deep' | 'clear';
+  /** How the voice reads, so the picker can be filtered before previewing. */
+  gender: 'male' | 'female';
+  /** The one-line summary shown under the name. */
   goodFor: string;
+  /** Concrete jobs this voice suits, shown as chips. */
+  bestFor: string[];
 }
 
 /** The prebuilt voices the Gemini speech models expose. */
 export const TTS_VOICES: TtsVoice[] = [
-  { name: 'Achernar', character: 'Soft', timbre: 'warm', goodFor: 'Intimate first-person narration' },
-  { name: 'Achird', character: 'Friendly', timbre: 'warm', goodFor: 'Memoir and warm non-fiction' },
-  { name: 'Algenib', character: 'Gravelly', timbre: 'deep', goodFor: 'Noir, grit, hard-boiled voices' },
-  { name: 'Algieba', character: 'Smooth', timbre: 'warm', goodFor: 'Literary fiction, long listening' },
-  { name: 'Alnilam', character: 'Firm', timbre: 'clear', goodFor: 'Business and instructional books' },
-  { name: 'Aoede', character: 'Breezy', timbre: 'bright', goodFor: 'Light comedy, YA' },
-  { name: 'Autonoe', character: 'Bright', timbre: 'bright', goodFor: 'Upbeat non-fiction' },
-  { name: 'Callirrhoe', character: 'Easy-going', timbre: 'warm', goodFor: 'Conversational narration' },
-  { name: 'Charon', character: 'Informative', timbre: 'clear', goodFor: 'Documentary and reference' },
-  { name: 'Despina', character: 'Smooth', timbre: 'warm', goodFor: 'Romance and drama' },
-  { name: 'Enceladus', character: 'Breathy', timbre: 'warm', goodFor: 'Quiet, interior passages' },
-  { name: 'Erinome', character: 'Clear', timbre: 'clear', goodFor: 'Technical material' },
-  { name: 'Fenrir', character: 'Excitable', timbre: 'bright', goodFor: 'Adventure, high energy' },
-  { name: 'Gacrux', character: 'Mature', timbre: 'deep', goodFor: 'Historical and literary fiction' },
-  { name: 'Iapetus', character: 'Clear', timbre: 'clear', goodFor: 'General narration' },
-  { name: 'Kore', character: 'Firm', timbre: 'clear', goodFor: 'Confident, steady narration' },
-  { name: 'Laomedeia', character: 'Upbeat', timbre: 'bright', goodFor: 'Self-help and motivation' },
-  { name: 'Leda', character: 'Youthful', timbre: 'bright', goodFor: 'Young adult narrators' },
-  { name: 'Orus', character: 'Firm', timbre: 'deep', goodFor: 'Thrillers and authority' },
-  { name: 'Puck', character: 'Upbeat', timbre: 'bright', goodFor: 'Humour and banter' },
-  { name: 'Pulcherrima', character: 'Forward', timbre: 'bright', goodFor: 'Persuasive non-fiction' },
-  { name: 'Rasalgethi', character: 'Informative', timbre: 'clear', goodFor: 'Essays and journalism' },
-  { name: 'Sadachbia', character: 'Lively', timbre: 'bright', goodFor: 'Children and family books' },
-  { name: 'Sadaltager', character: 'Knowledgeable', timbre: 'clear', goodFor: 'Academic and explanatory' },
-  { name: 'Schedar', character: 'Even', timbre: 'clear', goodFor: 'Long-form, low fatigue' },
-  { name: 'Sulafat', character: 'Warm', timbre: 'warm', goodFor: 'Classic audiobook narration' },
-  { name: 'Umbriel', character: 'Easy-going', timbre: 'warm', goodFor: 'Relaxed storytelling' },
-  { name: 'Vindemiatrix', character: 'Gentle', timbre: 'warm', goodFor: 'Poetry and reflection' },
-  { name: 'Zephyr', character: 'Bright', timbre: 'bright', goodFor: 'Energetic openings' },
-  { name: 'Zubenelgenubi', character: 'Casual', timbre: 'clear', goodFor: 'Podcast-style delivery' },
+  { name: 'Achernar', character: 'Soft', timbre: 'warm', gender: 'female',
+    goodFor: 'Intimate first-person narration',
+    bestFor: ['Audiobook narration', 'Memoir', 'Bedtime stories'] },
+  { name: 'Achird', character: 'Friendly', timbre: 'warm', gender: 'male',
+    goodFor: 'Memoir and warm non-fiction',
+    bestFor: ['Audiobook narration', 'Podcast', 'Explainer video'] },
+  { name: 'Algenib', character: 'Gravelly', timbre: 'deep', gender: 'male',
+    goodFor: 'Noir, grit, hard-boiled voices',
+    bestFor: ['Thriller narration', 'Character voice', 'Trailer'] },
+  { name: 'Algieba', character: 'Smooth', timbre: 'warm', gender: 'male',
+    goodFor: 'Literary fiction, long listening',
+    bestFor: ['Audiobook narration', 'Literary fiction', 'Long-form'] },
+  { name: 'Alnilam', character: 'Firm', timbre: 'clear', gender: 'male',
+    goodFor: 'Business and instructional books',
+    bestFor: ['Business books', 'Course narration', 'Corporate video'] },
+  { name: 'Aoede', character: 'Breezy', timbre: 'bright', gender: 'female',
+    goodFor: 'Light comedy, YA',
+    bestFor: ['YA fiction', 'Podcast', 'Social video'] },
+  { name: 'Autonoe', character: 'Bright', timbre: 'bright', gender: 'female',
+    goodFor: 'Upbeat non-fiction',
+    bestFor: ['Non-fiction', 'Explainer video', 'Advertising'] },
+  { name: 'Callirrhoe', character: 'Easy-going', timbre: 'warm', gender: 'female',
+    goodFor: 'Conversational narration',
+    bestFor: ['Podcast', 'Audiobook narration', 'Interview reads'] },
+  { name: 'Charon', character: 'Informative', timbre: 'clear', gender: 'male',
+    goodFor: 'Documentary and reference',
+    bestFor: ['Documentary', 'Reference books', 'News reads'] },
+  { name: 'Despina', character: 'Smooth', timbre: 'warm', gender: 'female',
+    goodFor: 'Romance and drama',
+    bestFor: ['Romance', 'Drama', 'Audiobook narration'] },
+  { name: 'Enceladus', character: 'Breathy', timbre: 'warm', gender: 'male',
+    goodFor: 'Quiet, interior passages',
+    bestFor: ['Literary fiction', 'Meditation', 'Poetry'] },
+  { name: 'Erinome', character: 'Clear', timbre: 'clear', gender: 'female',
+    goodFor: 'Technical material',
+    bestFor: ['Technical books', 'Documentation', 'E-learning'] },
+  { name: 'Fenrir', character: 'Excitable', timbre: 'bright', gender: 'male',
+    goodFor: 'Adventure, high energy',
+    bestFor: ['Adventure fiction', 'Trailer', 'Gaming'] },
+  { name: 'Gacrux', character: 'Mature', timbre: 'deep', gender: 'female',
+    goodFor: 'Historical and literary fiction',
+    bestFor: ['Historical fiction', 'Literary fiction', 'Documentary'] },
+  { name: 'Iapetus', character: 'Clear', timbre: 'clear', gender: 'male',
+    goodFor: 'General narration',
+    bestFor: ['Audiobook narration', 'Non-fiction', 'E-learning'] },
+  { name: 'Kore', character: 'Firm', timbre: 'clear', gender: 'female',
+    goodFor: 'Confident, steady narration',
+    bestFor: ['Non-fiction', 'Business books', 'Presentation'] },
+  { name: 'Laomedeia', character: 'Upbeat', timbre: 'bright', gender: 'female',
+    goodFor: 'Self-help and motivation',
+    bestFor: ['Self-help', 'Motivation', 'Advertising'] },
+  { name: 'Leda', character: 'Youthful', timbre: 'bright', gender: 'female',
+    goodFor: 'Young adult narrators',
+    bestFor: ['YA fiction', "Children's books", 'Social video'] },
+  { name: 'Orus', character: 'Firm', timbre: 'deep', gender: 'male',
+    goodFor: 'Thrillers and authority',
+    bestFor: ['Thriller narration', 'Documentary', 'Trailer'] },
+  { name: 'Puck', character: 'Upbeat', timbre: 'bright', gender: 'male',
+    goodFor: 'Humour and banter',
+    bestFor: ['Comedy', 'Podcast', 'Character voice'] },
+  { name: 'Pulcherrima', character: 'Forward', timbre: 'bright', gender: 'female',
+    goodFor: 'Persuasive non-fiction',
+    bestFor: ['Advertising', 'Self-help', 'Presentation'] },
+  { name: 'Rasalgethi', character: 'Informative', timbre: 'clear', gender: 'male',
+    goodFor: 'Essays and journalism',
+    bestFor: ['Journalism', 'Essays', 'Podcast'] },
+  { name: 'Sadachbia', character: 'Lively', timbre: 'bright', gender: 'male',
+    goodFor: 'Children and family books',
+    bestFor: ["Children's books", 'Family audio', 'Character voice'] },
+  { name: 'Sadaltager', character: 'Knowledgeable', timbre: 'clear', gender: 'male',
+    goodFor: 'Academic and explanatory',
+    bestFor: ['Academic texts', 'E-learning', 'Documentary'] },
+  { name: 'Schedar', character: 'Even', timbre: 'clear', gender: 'male',
+    goodFor: 'Long-form, low fatigue',
+    bestFor: ['Long audiobooks', 'Reference books', 'E-learning'] },
+  { name: 'Sulafat', character: 'Warm', timbre: 'warm', gender: 'female',
+    goodFor: 'Classic audiobook narration',
+    bestFor: ['Audiobook narration', 'Literary fiction', 'Memoir'] },
+  { name: 'Umbriel', character: 'Easy-going', timbre: 'warm', gender: 'male',
+    goodFor: 'Relaxed storytelling',
+    bestFor: ['Audiobook narration', 'Podcast', 'Bedtime stories'] },
+  { name: 'Vindemiatrix', character: 'Gentle', timbre: 'warm', gender: 'female',
+    goodFor: 'Poetry and reflection',
+    bestFor: ['Poetry', 'Meditation', 'Literary fiction'] },
+  { name: 'Zephyr', character: 'Bright', timbre: 'bright', gender: 'female',
+    goodFor: 'Energetic openings',
+    bestFor: ['Advertising', 'Trailer', 'Social video'] },
+  { name: 'Zubenelgenubi', character: 'Casual', timbre: 'clear', gender: 'male',
+    goodFor: 'Podcast-style delivery',
+    bestFor: ['Podcast', 'Interview reads', 'Explainer video'] },
 ];
 
 const TTS_MODEL = process.env.GEMINI_TTS_MODEL ?? 'gemini-2.5-flash-preview-tts';
@@ -2487,6 +2552,31 @@ interface SpeechPart {
   inlineData?: { data?: string; mimeType?: string };
 }
 
+/**
+ * The speech models are quota-limited per minute, and a book is thousands of
+ * calls, so being throttled is the normal case rather than a failure. This
+ * carries the provider's own retry hint back to the client, which waits it out
+ * — waiting here instead would just trip the serverless timeout.
+ */
+class SpeechQuotaError extends Error {
+  readonly retryAfterSeconds: number;
+  constructor(retryAfterSeconds: number, detail: string) {
+    super(detail);
+    this.name = 'SpeechQuotaError';
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+/** Reads the provider's suggested wait out of a 429, in seconds. */
+function retryDelayFrom(message: string): number {
+  const match =
+    message.match(/"retryDelay"\s*:\s*"?(\d+(?:\.\d+)?)s/i) ?? message.match(/retry in\s+([0-9.]+)\s*s/i);
+  const seconds = match ? Number.parseFloat(match[1]) : NaN;
+  // Free-tier windows are per minute, so a missing hint means "wait one out".
+  if (!Number.isFinite(seconds) || seconds <= 0) return 60;
+  return Math.min(Math.ceil(seconds) + 2, 300);
+}
+
 /** Synthesises one passage and returns raw PCM plus the format the model used. */
 async function synthesize(
   text: string,
@@ -2499,24 +2589,50 @@ async function synthesize(
   // models take direction; the instruction itself is never spoken.
   const prompt = style?.trim() ? `${style.trim()}:\n\n${text}` : text;
 
-  const response = await geminiClient.models.generateContent({
-    model: TTS_MODEL,
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    config: {
-      responseModalities: ['AUDIO'],
-      speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
-    },
-  } as never);
+  // Two quick attempts absorb a blip; anything longer belongs to the client,
+  // which has no request deadline to run into.
+  const attempts = 2;
+  let lastError: unknown;
 
-  const parts = (response.candidates?.[0]?.content?.parts ?? []) as SpeechPart[];
-  const audio = parts.find((part) => part.inlineData?.data);
-  if (!audio?.inlineData?.data) {
-    throw new Error('The speech model returned no audio for this passage.');
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const response = await geminiClient.models.generateContent({
+        model: TTS_MODEL,
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
+        },
+      } as never);
+
+      const parts = (response.candidates?.[0]?.content?.parts ?? []) as SpeechPart[];
+      const audio = parts.find((part) => part.inlineData?.data);
+      if (!audio?.inlineData?.data) {
+        throw new Error('The speech model returned no audio for this passage.');
+      }
+
+      const mimeType = audio.inlineData.mimeType ?? 'audio/L16;codec=pcm;rate=24000';
+      const sampleRate = Number(mimeType.match(/rate=(\d+)/)?.[1] ?? 24000);
+      return { audioBase64: audio.inlineData.data, mimeType, sampleRate };
+    } catch (error) {
+      lastError = error;
+      const message =
+        (error as { message?: string })?.message ??
+        (typeof error === 'object' ? JSON.stringify(error) : String(error));
+
+      if (/429|RESOURCE_EXHAUSTED|quota/i.test(message)) {
+        throw new SpeechQuotaError(retryDelayFrom(message), message);
+      }
+      // A transient 5xx is worth one immediate second attempt.
+      if (attempt < attempts - 1 && /50[023]|Service Unavailable|Overloaded|ECONNRESET|fetch failed/i.test(message)) {
+        await sleep(1200);
+        continue;
+      }
+      throw error;
+    }
   }
 
-  const mimeType = audio.inlineData.mimeType ?? 'audio/L16;codec=pcm;rate=24000';
-  const sampleRate = Number(mimeType.match(/rate=(\d+)/)?.[1] ?? 24000);
-  return { audioBase64: audio.inlineData.data, mimeType, sampleRate };
+  throw lastError instanceof Error ? lastError : new Error('Speech generation failed.');
 }
 
 app.get('/api/tts/voices', (_req, res) => {
@@ -2566,6 +2682,15 @@ app.post('/api/tts/speak', async (req, res) => {
     const result = await synthesize(String(text), String(voice), style ? String(style) : undefined);
     res.json({ ...result, characters: String(text).length, voice });
   } catch (error) {
+    if (error instanceof SpeechQuotaError) {
+      res.setHeader('Retry-After', String(error.retryAfterSeconds));
+      res.status(429).json({
+        error: `The speech model's quota is exhausted. Waiting ${error.retryAfterSeconds}s before trying this passage again.`,
+        retryAfterSeconds: error.retryAfterSeconds,
+        quotaExhausted: true,
+      });
+      return;
+    }
     handleError(res, error, 'Failed to generate speech');
   }
 });

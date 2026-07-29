@@ -401,9 +401,20 @@ test('the voice catalogue is well formed', () => {
       ['warm', 'bright', 'deep', 'clear'].includes(voice.timbre),
       `${voice.name} has an unknown timbre ${voice.timbre}`,
     );
+    // The picker renders a gender icon per row, so every voice needs one.
+    assert.ok(['male', 'female'].includes(voice.gender), `${voice.name} has no gender: ${voice.gender}`);
+    assert.ok(
+      Array.isArray(voice.bestFor) && voice.bestFor.length >= 2 && voice.bestFor.every((use) => use.trim()),
+      `${voice.name} needs at least two concrete uses`,
+    );
   }
   // The default the UI ships with must exist in the catalogue.
   assert.ok(names.has('Sulafat'));
+  // Both genders must be usefully represented, or the filter is pointless.
+  for (const gender of ['male', 'female']) {
+    const count = TTS_VOICES.filter((voice) => voice.gender === gender).length;
+    assert.ok(count >= 8, `only ${count} ${gender} voices`);
+  }
 });
 
 test('EPUB output is declared 3.0 and free of EPUB 2 constructs', () => {

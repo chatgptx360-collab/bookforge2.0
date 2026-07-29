@@ -100,7 +100,7 @@ Mounted at `/api`, all `POST` unless noted.
 | `/api/book/lookup` | `{ text, context?, targetLanguage? }` | `{ explanation }` for the reader's lookup |
 | `GET /api/tts/voices` | — | `{ voices[], model, available, format }` |
 | `/api/tts/plan` | `{ text, maxChars? }` | `{ chunks[], characters, estimatedSeconds }` |
-| `/api/tts/speak` | `{ text, voice?, style? }` | `{ audioBase64, mimeType, sampleRate }` — raw 16-bit PCM |
+| `/api/tts/speak` | `{ text, voice?, style? }` | `{ audioBase64, mimeType, sampleRate }` — raw 16-bit PCM; 429 with `retryAfterSeconds` when throttled |
 
 Uploads are capped at 25 MB; oversized files get a 413 with a readable message.
 `/api/tts/speak` rejects passages over 4,500 characters with a 413 telling you to
@@ -131,10 +131,13 @@ Typography settings are global.
 Both speech views run on Gemini's TTS models through the same three routes, and
 both hand you a finished file rather than a stream you have to capture.
 
-**Thirty narrators.** `GET /api/tts/voices` returns the prebuilt voice catalogue
-with a character note, a timbre (warm / clear / bright / deep) and what each one
-suits. The picker filters by timbre and previews any voice on a fixed line, so
-you hear a narrator before committing a book to them.
+**Thirty narrators, described.** `GET /api/tts/voices` returns the prebuilt voice
+catalogue: a character note, a timbre (warm / clear / bright / deep), whether the
+voice reads male or female, and the concrete jobs it suits — audiobook
+narration, podcast, documentary, trailer, children's books and so on. Each row
+carries a ♂/♀ icon beside its play button, and the list filters by gender or
+timbre. Every voice previews on a fixed line, so you hear a narrator before
+committing a book to them.
 
 **Delivery is directed, not dialled.** These models take direction in prose, so
 the style box is passed as an instruction ahead of the passage — "read this
@@ -153,10 +156,25 @@ encodes MP3 on demand with lamejs (loaded lazily — most sessions never ask for
 it). Keeping this client-side is what makes book-length audio possible at all:
 neither the function timeout nor the response size caps how long a book can be.
 
+**Being throttled is not a failure.** Speech quotas are per minute and a book is
+thousands of calls, so a 429 is routine. The server reads the provider's own
+retry hint and hands it to the client rather than sleeping through the
+serverless timeout; the client waits it out with a visible countdown and carries
+on. Throttling and breakage get separate budgets — a quota window is sat through
+several times, while a 5xx is retried twice and then reported, so a real failure
+surfaces in seconds instead of after minutes of silent retrying. A quota that
+survives every wait is spent for the day, and the run stops there rather than
+failing every remaining chapter; what was narrated is kept.
+
 **A failed chapter does not end the run.** Chapters are narrated in order, and
 one that fails is marked and skipped; the rest continue and the failures can be
 retried afterwards. Download any chapter as WAV or MP3, or the whole book as a
 ZIP of either.
+
+**Errors say what happened.** When a platform fails outside the handler it
+answers with an HTML page, and parsing that as JSON used to report
+`Unexpected token 'A'`. Responses are read as text first, so the message names
+the status and what the server actually said.
 
 ## Conversion notes
 
@@ -218,6 +236,7 @@ src/components/TtsStudioPanel.tsx  Paste text → speech
 src/components/tts/        Voice catalogue hook and picker with previews
 src/components/reader/     Pagination content, panels, themes, book model
 src/utils/audio.ts         PCM stitching, WAV writer, lazy MP3 encoder
+src/utils/speech.ts        Speech client: safe parsing, quota waits, retries
 src/utils/readerStore.ts   Per-book position, bookmarks, highlights, settings
 src/utils/docxExporter.ts  Client-side KDP DOCX builder (lazy-loaded)
 tests/conversion.test.mjs  Round-trip and format-validity tests
