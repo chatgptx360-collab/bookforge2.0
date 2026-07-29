@@ -26,6 +26,11 @@ export interface AudiobookSession {
   voice: string;
   style: string;
   announceChapters: boolean;
+  /**
+   * Which sections to narrate, by index. Absent on saves written before
+   * skipping existed, in which case the default is derived from the document.
+   */
+  included?: Record<number, boolean>;
   /** Chapter index → finished audio. Failed chapters are simply absent. */
   chapters: Record<number, AudiobookChapterSave>;
   savedAt: number;

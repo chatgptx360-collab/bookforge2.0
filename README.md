@@ -199,6 +199,13 @@ Throttling and breakage also get separate budgets: a quota window is sat through
 several times, while a 5xx is retried twice and then reported, so a real failure
 surfaces in seconds instead of after minutes of silent retrying.
 
+**You choose what gets read.** A manuscript parses into front matter and
+chapters, and not all of it belongs in an audiobook — a table of contents read
+aloud is just a list of numbers, so it starts unticked while everything else
+starts in. Every section has a checkbox, with *Everything*, *Chapters only* and
+*Nothing* as shortcuts. Progress, packaging and the ZIP all count the selection
+rather than the file, and the selection is saved with the rest of the run.
+
 **A failed chapter does not end the run.** Chapters are narrated in order, and
 one that fails is marked and skipped; the rest continue and the failures can be
 retried afterwards. Download any chapter as WAV or MP3, or the whole book as a

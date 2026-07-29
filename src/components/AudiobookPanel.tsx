@@ -64,6 +64,9 @@ export default function AudiobookPanel() {
   const [engine, setEngine] = useState<Engine>(() => loadEngine());
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [restoring, setRestoring] = useState(true);
+  // Which sections to narrate. A table of contents is meaningless read aloud,
+  // so it starts excluded; everything else starts in.
+  const [included, setIncluded] = useState<Record<number, boolean>>({});
   const runningRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Mirrors `audio` so unmount can revoke every object URL without the cleanup
@@ -98,6 +101,12 @@ export default function AudiobookPanel() {
       setVoice(saved.voice);
       setStyle(saved.style);
       setAnnounceChapters(saved.announceChapters);
+      setIncluded(
+        saved.included ??
+          Object.fromEntries(
+            (saved.doc as ParsedDocument).sections.map((section, index) => [index, section.type !== 'toc']),
+          ),
+      );
       setAudio(
         Object.fromEntries(
           Object.entries(saved.chapters).map(([index, chapter]) => [
@@ -140,12 +149,13 @@ export default function AudiobookPanel() {
         voice,
         style,
         announceChapters,
+        included,
         chapters: chapterSaves,
         savedAt: stamp,
       }).then(() => setSavedAt(stamp));
     }, 800);
     return () => clearTimeout(timer);
-  }, [restoring, doc, fileName, voice, style, announceChapters, audio]);
+  }, [restoring, doc, fileName, voice, style, announceChapters, included, audio]);
 
   // The picker is engine-agnostic; only the catalogue behind it changes.
   const activeCatalogue =
@@ -167,8 +177,10 @@ export default function AudiobookPanel() {
       const response = await fetch('/api/book/parse-file', { method: 'POST', body: form });
       const payload = await readJson(response);
       if (!response.ok) throw new Error(String(payload.error ?? 'Could not read the book.'));
-      setDoc(payload as unknown as ParsedDocument);
+      const parsed = payload as unknown as ParsedDocument;
+      setDoc(parsed);
       setFileName(file.name);
+      setIncluded(Object.fromEntries(parsed.sections.map((section, index) => [index, section.type !== 'toc'])));
       releaseAudio();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed.');
@@ -222,6 +234,7 @@ export default function AudiobookPanel() {
     try {
       for (let index = 0; index < chapters.length; index++) {
         if (!runningRef.current) break;
+        if (included[index] === false) continue;
         if (audio[index]?.status === 'done') continue;
 
         setAudio((prev) => ({ ...prev, [index]: { status: 'working' } }));
@@ -283,7 +296,7 @@ export default function AudiobookPanel() {
   };
 
   const downloadAll = async (format: 'wav' | 'mp3') => {
-    const done = chapters.map((_, index) => index).filter((index) => audio[index]?.blob);
+    const done = chosen.filter((index) => audio[index]?.blob);
     if (done.length === 0) return;
     setStatus(`Packaging ${done.length} chapters…`);
     try {
@@ -309,10 +322,12 @@ export default function AudiobookPanel() {
     }
   };
 
-  const completed = chapters.filter((_, index) => audio[index]?.status === 'done').length;
-  const totalSeconds = chapters.reduce((sum, _, index) => sum + (audio[index]?.seconds ?? 0), 0);
-  const failed = chapters.filter((_, index) => audio[index]?.status === 'error').length;
-  const percent = chapters.length === 0 ? 0 : Math.round((completed / chapters.length) * 100);
+  const isIn = (index: number) => included[index] !== false;
+  const chosen = chapters.map((_, index) => index).filter(isIn);
+  const completed = chosen.filter((index) => audio[index]?.status === 'done').length;
+  const totalSeconds = chosen.reduce((sum, index) => sum + (audio[index]?.seconds ?? 0), 0);
+  const failed = chosen.filter((index) => audio[index]?.status === 'error').length;
+  const percent = chosen.length === 0 ? 0 : Math.round((completed / chosen.length) * 100);
 
   return (
     <div className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 sm:py-10 bg-[#0A0A0B] space-y-6">
@@ -499,7 +514,7 @@ export default function AudiobookPanel() {
                   Narration
                 </h3>
                 <span className="text-[10px] font-mono text-[#D4AF37]">
-                  {completed}/{chapters.length} chapters · {formatDuration(totalSeconds)}
+                  {completed}/{chosen.length} sections · {formatDuration(totalSeconds)}
                 </span>
               </div>
 
@@ -525,7 +540,8 @@ export default function AudiobookPanel() {
                   <button
                     type="button"
                     onClick={run}
-                    className="flex items-center gap-2 px-4 py-2.5 bg-[#D4AF37] text-black hover:bg-[#b08e24] font-bold text-[11px] uppercase tracking-wider rounded-xl cursor-pointer"
+                    disabled={chosen.length === 0}
+                    className="flex items-center gap-2 px-4 py-2.5 bg-[#D4AF37] text-black hover:bg-[#b08e24] disabled:opacity-30 disabled:pointer-events-none font-bold text-[11px] uppercase tracking-wider rounded-xl cursor-pointer"
                   >
                     <Play className="w-3.5 h-3.5" /> {completed > 0 ? 'Continue narrating' : 'Narrate the book'}
                   </button>
@@ -559,16 +575,61 @@ export default function AudiobookPanel() {
                 )}
               </div>
 
+
+              <div className="flex items-center gap-2 flex-wrap text-[10px]">
+                <span className="font-mono uppercase tracking-wider text-[#71717A]">Include</span>
+                {[
+                  { label: 'Everything', pick: () => chapters.map((_, i) => i) },
+                  { label: 'Chapters only', pick: () => chapters.map((s, i) => (s.type === 'chapter' ? i : -1)).filter((i) => i >= 0) },
+                  { label: 'Nothing', pick: () => [] },
+                ].map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    disabled={running}
+                    onClick={() => {
+                      const keep = new Set(preset.pick());
+                      setIncluded(Object.fromEntries(chapters.map((_, i) => [i, keep.has(i)])));
+                    }}
+                    className="px-2 py-1 rounded-lg border border-[#27272A] text-[#71717A] hover:text-[#A1A1AA] cursor-pointer disabled:opacity-40 disabled:pointer-events-none uppercase tracking-wider font-semibold"
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+                <span className="text-[#52525B] font-mono ml-auto">
+                  {chosen.length} of {chapters.length} selected
+                </span>
+              </div>
+
               <div className="max-h-[420px] overflow-y-auto space-y-1.5 pr-1">
                 {chapters.map((section, index) => {
                   const entry = audio[index];
+                  const inRun = isIn(index);
                   return (
-                    <div key={index} className="p-2.5 rounded-lg bg-[#0D0D10] border border-[#27272A]/60">
+                    <div
+                      key={index}
+                      className={`p-2.5 rounded-lg border transition ${
+                        inRun ? 'bg-[#0D0D10] border-[#27272A]/60' : 'bg-transparent border-[#27272A]/30 opacity-45'
+                      }`}
+                    >
                       <div className="flex items-center gap-2.5">
+                        <input
+                          type="checkbox"
+                          checked={inRun}
+                          disabled={running}
+                          aria-label={`Narrate ${section.title}`}
+                          onChange={(e) => setIncluded((prev) => ({ ...prev, [index]: e.target.checked }))}
+                          className="accent-[#D4AF37] shrink-0 cursor-pointer disabled:cursor-not-allowed"
+                        />
                         <span className="text-[9px] font-mono text-[#52525B] w-7 shrink-0">
                           {String(index + 1).padStart(2, '0')}
                         </span>
-                        <span className="text-[11px] text-[#A1A1AA] truncate flex-1">{section.title}</span>
+                        <span className="text-[11px] text-[#A1A1AA] truncate flex-1">
+                          {section.title}
+                          {section.type !== 'chapter' && (
+                            <span className="ml-1.5 text-[9px] font-mono uppercase text-[#52525B]">{section.type}</span>
+                          )}
+                        </span>
                         {entry?.seconds && (
                           <span className="text-[9px] font-mono text-[#52525B] shrink-0">
                             {formatDuration(entry.seconds)}
