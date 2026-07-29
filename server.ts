@@ -389,11 +389,167 @@ function formatFromName(fileName: string): SourceFormat | null {
   return ext === 'docx' || ext === 'pdf' || ext === 'epub' || ext === 'txt' || ext === 'rtf' ? ext : null;
 }
 
+const MAX_UNCOMPRESSED_BYTES = 400 * 1024 * 1024;
+const MAX_ZIP_ENTRIES = 5000;
+const MAX_COMPRESSION_RATIO = 250;
+
+/**
+ * Guards against zip bombs before anything is decompressed: a hostile 20 kB
+ * EPUB can otherwise expand to gigabytes and take the function down.
+ */
+function assertSafeZip(zip: AdmZip): void {
+  const entries = zip.getEntries();
+  if (entries.length > MAX_ZIP_ENTRIES) {
+    throw new Error(`Archive rejected: ${entries.length} entries exceeds the ${MAX_ZIP_ENTRIES} limit.`);
+  }
+  let uncompressed = 0;
+  let compressed = 0;
+  for (const entry of entries) {
+    uncompressed += entry.header.size;
+    compressed += entry.header.compressedSize;
+    if (uncompressed > MAX_UNCOMPRESSED_BYTES) {
+      throw new Error('Archive rejected: uncompressed contents exceed the size limit.');
+    }
+  }
+  if (compressed > 4096 && uncompressed / Math.max(1, compressed) > MAX_COMPRESSION_RATIO) {
+    throw new Error('Archive rejected: suspicious compression ratio.');
+  }
+}
+
+/**
+ * Identifies a file by its leading bytes. Extensions are attacker-controlled,
+ * so the sniffed type is what the converters actually act on.
+ */
+export function sniffFormat(buffer: Buffer): SourceFormat | 'zip' | null {
+  if (buffer.length < 4) return 'txt';
+  const head = buffer.subarray(0, 5).toString('latin1');
+
+  if (head.startsWith('%PDF-')) return 'pdf';
+  if (head.startsWith('{\\rtf')) return 'rtf';
+  if (buffer[0] === 0x50 && buffer[1] === 0x4b && (buffer[2] === 0x03 || buffer[2] === 0x05 || buffer[2] === 0x07)) {
+    // Both DOCX and EPUB are ZIP containers — look inside to tell them apart.
+    try {
+      const zip = new AdmZip(buffer);
+      assertSafeZip(zip);
+      const names = zip.getEntries().map((entry) => entry.entryName);
+      if (names.some((name) => name === 'mimetype' || name.toLowerCase().endsWith('.opf'))) return 'epub';
+      if (names.some((name) => name.startsWith('word/') || name === '[Content_Types].xml')) return 'docx';
+    } catch {
+      return 'zip';
+    }
+    return 'zip';
+  }
+  // Anything that decodes as text is treated as plain text.
+  return buffer.includes(0) ? null : 'txt';
+}
+
+/** Reconciles the declared extension with the real bytes. */
+function resolveSourceFormat(buffer: Buffer, fileName: string): SourceFormat {
+  const declared = formatFromName(fileName);
+  const sniffed = sniffFormat(buffer);
+
+  if (!declared) throw new Error(`Unsupported file type: ${path.extname(fileName) || fileName}`);
+  if (sniffed === null || sniffed === 'zip') {
+    throw new Error(`This file is not a readable ${declared.toUpperCase()} document.`);
+  }
+  if (sniffed !== declared) {
+    // Trust the bytes, but only when the real type is one we can convert.
+    console.warn(`[upload] ${fileName} declared ${declared} but looks like ${sniffed}; using ${sniffed}.`);
+  }
+  return sniffed;
+}
+
+const PAGE_MARKER = /^\s*-{2,}\s*\d+\s*of\s*\d+\s*-{2,}\s*$/i;
+const SENTENCE_END = /[.!?…"'”’»)\]]$|[:;,—–-]$/;
+
+/**
+ * PDF text arrives broken at the printed line, with page furniture mixed in.
+ * This rebuilds paragraphs: drop page markers and repeated running heads,
+ * de-hyphenate across line breaks, and join lines that continue a sentence.
+ */
+export function reflowPdfText(raw: string): string {
+  const lines = raw.replace(/\r\n?/g, '\n').split('\n');
+
+  // Split on the page markers pdf-parse injects so running heads can be spotted.
+  const pages: string[][] = [[]];
+  for (const line of lines) {
+    if (PAGE_MARKER.test(line)) pages.push([]);
+    else pages.at(-1)?.push(line);
+  }
+
+  // A line repeated at the top or bottom of most pages is a header/footer.
+  const edgeCounts = new Map<string, number>();
+  for (const page of pages) {
+    const meaningful = page.filter((line) => line.trim());
+    for (const candidate of [meaningful[0], meaningful.at(-1)]) {
+      const key = candidate?.trim().replace(/\d+/g, '#');
+      if (key && key.length > 2 && key.length < 90) edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
+    }
+  }
+  const threshold = Math.max(2, Math.ceil(pages.length * 0.6));
+  const running = new Set([...edgeCounts.entries()].filter(([, n]) => n >= threshold).map(([key]) => key));
+
+  const cleaned: string[] = [];
+  for (const page of pages) {
+    const filled = page.map((line, index) => ({ line, index })).filter((entry) => entry.line.trim());
+    const edgeIndices = new Set(
+      [filled[0], filled[1], filled.at(-2), filled.at(-1)].filter(Boolean).map((entry) => entry!.index),
+    );
+    page.forEach((line, index) => {
+      if (edgeIndices.has(index)) {
+        const normalized = line.trim().replace(/\d+/g, '#');
+        if (running.has(normalized)) return;
+        // A bare page number on its own line is furniture too.
+        if (/^\s*\d{1,4}\s*$/.test(line)) return;
+      }
+      cleaned.push(line);
+    });
+    cleaned.push('');
+  }
+
+  // Rejoin wrapped lines into paragraphs.
+  const out: string[] = [];
+  let buffer = '';
+  const flush = () => {
+    if (buffer.trim()) out.push(buffer.trim());
+    buffer = '';
+  };
+
+  for (const rawLine of cleaned) {
+    const line = rawLine.trim();
+    if (!line) {
+      flush();
+      continue;
+    }
+    if (headingInfo(line)) {
+      flush();
+      out.push(line);
+      continue;
+    }
+    if (!buffer) {
+      buffer = line;
+      continue;
+    }
+    if (/[-‐‑‒­]$/.test(buffer) && /^[a-z]/.test(line)) {
+      // Word split across a line break: "consider-\nation" → "consideration".
+      buffer = `${buffer.replace(/[-‐‑‒­]$/, '')}${line}`;
+    } else if (SENTENCE_END.test(buffer) && !/^[a-z,;]/.test(line)) {
+      flush();
+      buffer = line;
+    } else {
+      buffer = `${buffer} ${line}`;
+    }
+  }
+  flush();
+
+  return out.join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 async function extractPdfText(buffer: Buffer): Promise<string> {
   const parser = new PDFParse({ data: new Uint8Array(buffer) });
   try {
     const result = await parser.getText();
-    return result.text ?? '';
+    return reflowPdfText(result.text ?? '');
   } finally {
     await parser.destroy().catch(() => undefined);
   }
@@ -402,6 +558,7 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
 /** Reads an EPUB in spine order and returns its prose as plain text. */
 export function extractEpubText(buffer: Buffer): string {
   const zip = new AdmZip(buffer);
+  assertSafeZip(zip);
   const readEntry = (entryPath: string): string | null => {
     const normalized = entryPath.replace(/^\/+/, '');
     const entry = zip.getEntry(normalized) ?? zip.getEntry(decodeURIComponent(normalized));
@@ -454,8 +611,7 @@ export function extractEpubText(buffer: Buffer): string {
 }
 
 export async function extractTextFromFile(buffer: Buffer, fileName: string): Promise<string> {
-  const format = formatFromName(fileName);
-  if (!format) throw new Error(`Unsupported file type: ${path.extname(fileName) || fileName}`);
+  const format = resolveSourceFormat(buffer, fileName);
 
   switch (format) {
     case 'docx': {
@@ -1270,6 +1426,86 @@ function deriveTitle(text: string, fileName: string): string {
   if (firstLine && firstLine.length <= 120) return firstLine.replace(/^#+\s*/, '');
   return baseNameOf(fileName);
 }
+
+// ---------------------------------------------------------------------------
+// Rate limiting
+// ---------------------------------------------------------------------------
+
+interface RateBucket {
+  count: number;
+  resetAt: number;
+}
+
+const rateBuckets = new Map<string, RateBucket>();
+
+function clientKey(req: Request): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  const ip = Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(',')[0]?.trim();
+  return ip || req.socket.remoteAddress || 'unknown';
+}
+
+/**
+ * Per-IP fixed-window limiter. The AI routes spend real money on someone's API
+ * key, so they are capped separately and more tightly than conversion.
+ *
+ * NOTE: state is per serverless instance, so the effective ceiling on Vercel is
+ * this limit multiplied by the number of warm instances. It stops casual abuse,
+ * not a distributed attack — put a WAF or gateway limiter in front for that.
+ */
+function rateLimit(name: string, max: number, windowMs: number) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (max <= 0) {
+      next();
+      return;
+    }
+    const key = `${name}:${clientKey(req)}`;
+    const now = Date.now();
+    const bucket = rateBuckets.get(key);
+
+    if (!bucket || bucket.resetAt <= now) {
+      rateBuckets.set(key, { count: 1, resetAt: now + windowMs });
+    } else if (bucket.count >= max) {
+      const retryAfter = Math.ceil((bucket.resetAt - now) / 1000);
+      res.setHeader('Retry-After', String(retryAfter));
+      res.status(429).json({
+        error: `Rate limit reached for this endpoint. Try again in ${retryAfter}s.`,
+        retryAfter,
+      });
+      return;
+    } else {
+      bucket.count++;
+    }
+
+    // Opportunistic cleanup so the map cannot grow without bound.
+    if (rateBuckets.size > 5000) {
+      for (const [entryKey, entry] of rateBuckets) {
+        if (entry.resetAt <= now) rateBuckets.delete(entryKey);
+      }
+    }
+    next();
+  };
+}
+
+const AI_ROUTES = [
+  '/api/book/analyze-discovery',
+  '/api/book/generate-outline',
+  '/api/book/generate-chapter',
+  '/api/book/translate-chunk',
+  '/api/book/enhance-draft',
+  '/api/book/lookup',
+  '/api/book/generate-cover',
+  '/api/author-empire/generate-titles',
+  '/api/author-empire/generate-blurb',
+  '/api/author-empire/analyze-cover',
+];
+
+app.use(AI_ROUTES, rateLimit('ai', Number(process.env.AI_RATE_LIMIT ?? 40), 60 * 60 * 1000));
+app.use(
+  ['/api/book/convert', '/api/book/parse-file'],
+  rateLimit('convert', Number(process.env.CONVERT_RATE_LIMIT ?? 120), 60 * 60 * 1000),
+);
+// The image model is the most expensive call in the app.
+app.use('/api/book/generate-cover', rateLimit('cover', Number(process.env.COVER_RATE_LIMIT ?? 10), 60 * 60 * 1000));
 
 // ---------------------------------------------------------------------------
 // API — health

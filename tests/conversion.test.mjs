@@ -179,3 +179,47 @@ test('robustJsonParse recovers from fenced and truncated JSON', () => {
 test('extractTextFromFile rejects unknown extensions', async () => {
   await assert.rejects(() => extractTextFromFile(Buffer.from('x'), 'file.xyz'), /Unsupported file type/);
 });
+
+test('reflowPdfText rebuilds paragraphs from printed lines', () => {
+  const { reflowPdfText } = require('../server-build/server.cjs');
+  const raw = [
+    'The Test Book',
+    'This is a long opening paragraph that will certainly wrap across several printed lines once it is laid',
+    'out on an A4 page at eleven point Helvetica, which is exactly the situation we want to inspect',
+    'closely.',
+    '',
+    'A second short paragraph with a hyphen-',
+    'ated word inside it.',
+    '-- 1 of 2 --',
+    'The Test Book',
+    'Chapter 2: Onwards',
+    'More prose here.',
+    '-- 2 of 2 --',
+  ].join('\n');
+
+  const out = reflowPdfText(raw);
+  assert.ok(!/-- \d+ of \d+ --/.test(out), 'page markers must be stripped');
+  assert.match(out, /laid out on an A4 page/, 'wrapped lines must rejoin');
+  assert.match(out, /hyphenated word/, 'hyphenation across lines must be repaired');
+  assert.match(out, /^Chapter 2: Onwards$/m, 'headings stay on their own line');
+  // "The Test Book" is a running head on both pages; it should survive once at most.
+  assert.ok((out.match(/The Test Book/g) ?? []).length <= 1, 'running heads must be dropped');
+});
+
+test('sniffFormat identifies real file types', () => {
+  const { sniffFormat, convertTextToEpub } = require('../server-build/server.cjs');
+  assert.equal(sniffFormat(Buffer.from('%PDF-1.7\n...')), 'pdf');
+  assert.equal(sniffFormat(Buffer.from('{\\rtf1\\ansi hello}')), 'rtf');
+  assert.equal(sniffFormat(Buffer.from('Just some plain text')), 'txt');
+  assert.equal(sniffFormat(convertTextToEpub('Chapter 1: A\n\nBody.', 'T')), 'epub');
+  assert.equal(sniffFormat(Buffer.from([0x00, 0x01, 0x02, 0x03, 0x04])), null);
+});
+
+test('extractTextFromFile rejects a file whose bytes are not readable', async () => {
+  const { extractTextFromFile } = require('../server-build/server.cjs');
+  // A .txt containing NUL bytes is not text.
+  await assert.rejects(
+    () => extractTextFromFile(Buffer.from([0x00, 0x01, 0x02, 0x03]), 'trap.txt'),
+    /not a readable/i,
+  );
+});

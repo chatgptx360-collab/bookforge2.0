@@ -83,3 +83,7 @@ body {
 @media print {
   .no-print { display: none !important; }
 }
+
+/* Horizontal tool strips on mobile scroll without showing a scrollbar. */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }

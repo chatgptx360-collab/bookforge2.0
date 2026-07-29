@@ -18,6 +18,7 @@ import {
   ArrowRightLeft,
   BookMarked,
   Award,
+  PanelLeft,
 } from 'lucide-react';
 import BookReader from './BookReader';
 import type { BookProject, DocumentChapter, ParsedDocument, ParsedSection } from '../types';
@@ -109,6 +110,7 @@ export default function ReaderEditorPanel() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [isPreviewMode, setIsPreviewMode] = useState(false);
   const [readingFullscreen, setReadingFullscreen] = useState(false);
+  const [sectionsOpen, setSectionsOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -352,8 +354,8 @@ export default function ReaderEditorPanel() {
   }, [readingFullscreen]);
 
   return (
-    <div className={`flex-1 flex flex-col h-screen overflow-hidden ${activeTheme.bg} transition-colors duration-200`}>
-      <header className="h-16 border-b border-[#27272A] px-6 bg-[#111114] flex items-center justify-between z-10 select-none shrink-0">
+    <div className={`flex-1 flex flex-col min-h-0 overflow-hidden ${activeTheme.bg} transition-colors duration-200`}>
+      <header className="h-14 sm:h-16 border-b border-[#27272A] px-3 sm:px-6 bg-[#111114] flex items-center justify-between gap-2 z-10 select-none shrink-0">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-8 h-8 rounded-lg bg-[#D4AF37]/10 border border-[#D4AF37]/35 flex items-center justify-center text-[#D4AF37] shrink-0">
             <BookOpen className="w-4 h-4" />
@@ -366,8 +368,8 @@ export default function ReaderEditorPanel() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="hidden md:flex items-center bg-[#18181B] border border-[#27272A] rounded-lg p-1.5 gap-1 text-[10px] font-mono text-zinc-400">
+        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+          <div className="hidden lg:flex items-center bg-[#18181B] border border-[#27272A] rounded-lg p-1.5 gap-1 text-[10px] font-mono text-zinc-400">
             <Palette className="w-3.5 h-3.5 text-[#D4AF37] ml-0.5 mr-1" />
             {EDITOR_THEMES.map((theme) => (
               <button
@@ -386,6 +388,16 @@ export default function ReaderEditorPanel() {
               </button>
             ))}
           </div>
+
+          <button
+            type="button"
+            onClick={() => setSectionsOpen((v) => !v)}
+            className="md:hidden p-2 rounded-lg bg-[#18181B] border border-[#27272A] text-zinc-300 hover:text-white cursor-pointer transition shrink-0"
+            title="Sections"
+            aria-label="Toggle sections"
+          >
+            <PanelLeft className="w-3.5 h-3.5" />
+          </button>
 
           <button
             type="button"
@@ -471,13 +483,22 @@ export default function ReaderEditorPanel() {
       </header>
 
       <div className="flex-1 flex overflow-hidden relative">
+        {sectionsOpen && (
+          <div
+            className="fixed inset-0 z-30 bg-black/60 md:hidden"
+            onClick={() => setSectionsOpen(false)}
+            aria-hidden="true"
+          />
+        )}
         <AnimatePresence initial={false}>
           {!isFocusMode && (
             <motion.aside
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 260, opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
-              className="border-r border-[#27272A] bg-[#0A0A0B]/80 flex flex-col h-full select-none overflow-hidden shrink-0"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className={`border-r border-[#27272A] bg-[#0A0A0B] md:bg-[#0A0A0B]/80 flex-col h-full select-none overflow-hidden shrink-0 w-[260px] ${
+                sectionsOpen ? 'flex fixed inset-y-0 left-0 z-40 shadow-2xl' : 'hidden'
+              } md:static md:flex md:shadow-none`}
             >
               <div className="p-4 border-b border-[#27272A] space-y-4 w-[260px]">
                 <div className="space-y-1">
@@ -566,7 +587,10 @@ export default function ReaderEditorPanel() {
                   {chapters.map((ch, idx) => (
                     <div
                       key={ch.id}
-                      onClick={() => setSelectedChapterId(ch.id)}
+                      onClick={() => {
+                        setSelectedChapterId(ch.id);
+                        setSectionsOpen(false);
+                      }}
                       className={`p-2.5 rounded-lg border group cursor-pointer transition flex items-center gap-2 ${
                         selectedChapterId === ch.id
                           ? 'bg-[#D4AF37]/10 border-[#D4AF37]/45 text-white'

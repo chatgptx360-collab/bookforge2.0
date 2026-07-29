@@ -316,13 +316,13 @@ export default function ConverterPanel() {
       : Math.round(fileProgress.reduce((sum, p) => sum + p.percent, 0) / fileProgress.length);
 
   return (
-    <div className="flex-1 overflow-y-auto px-8 py-10 bg-[#0A0A0B] space-y-8 select-none">
+    <div className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 sm:py-10 bg-[#0A0A0B] space-y-6 sm:space-y-8 select-none">
       <header className="border-b border-[#27272A]/40 pb-6">
         <div className="flex items-center gap-2 text-xs font-mono font-bold tracking-widest text-[#D4AF37] uppercase">
           <span className="w-2 h-2 rounded-full bg-[#D4AF37] animate-pulse" />
           Utility Workspace
         </div>
-        <h1 className="text-3xl font-display font-bold text-white tracking-tight mt-1">
+        <h1 className="text-2xl sm:text-3xl font-display font-bold text-white tracking-tight mt-1">
           Universal Book &amp; File Converter
         </h1>
         <p className="text-sm text-[#71717A] max-w-xl mt-1 leading-relaxed">
@@ -332,7 +332,7 @@ export default function ConverterPanel() {
       </header>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-        <section className="lg:col-span-7 bg-[#111114] border border-[#27272A] rounded-2xl p-6 shadow-xl space-y-6">
+        <section className="lg:col-span-7 bg-[#111114] border border-[#27272A] rounded-2xl p-4 sm:p-6 shadow-xl space-y-6 min-w-0">
           <h2 className="text-sm font-semibold tracking-wider text-white uppercase flex items-center gap-2">
             <Upload className="w-4 h-4 text-[#D4AF37]" /> Upload and Parameterize
           </h2>
@@ -597,7 +597,7 @@ export default function ConverterPanel() {
           )}
         </section>
 
-        <aside className="lg:col-span-5 space-y-4">
+        <aside className="lg:col-span-5 space-y-4 min-w-0">
           <div className="bg-[#111114] border border-[#27272A] rounded-2xl p-5 shadow-xl space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-mono font-bold uppercase text-[#71717A] tracking-wider">

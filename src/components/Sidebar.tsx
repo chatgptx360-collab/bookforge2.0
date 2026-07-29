@@ -1,9 +1,12 @@
-import { BookOpen, RefreshCw } from 'lucide-react';
+import { BookOpen, RefreshCw, X } from 'lucide-react';
 import type { ViewId } from '../App';
 
 interface SidebarProps {
   activeView: ViewId;
   setActiveView: (view: ViewId) => void;
+  /** Drawer state on small screens; the sidebar is always visible from `md` up. */
+  isOpen?: boolean;
+  onClose?: () => void;
 }
 
 const NAV_ITEMS: { id: ViewId; label: string; hint: string; icon: typeof BookOpen }[] = [
@@ -11,10 +14,24 @@ const NAV_ITEMS: { id: ViewId; label: string; hint: string; icon: typeof BookOpe
   { id: 'reader', label: 'Reader & Editor', hint: 'Read, edit & save book files', icon: BookOpen },
 ];
 
-export default function Sidebar({ activeView, setActiveView }: SidebarProps) {
+export default function Sidebar({ activeView, setActiveView, isOpen = false, onClose }: SidebarProps) {
   return (
-    <nav className="w-72 shrink-0 border-r border-[#27272A] bg-[#111114] h-screen flex flex-col select-none text-[#E4E4E7]">
-      <div className="p-6 border-b border-[#27272A]">
+    <nav
+      className={`w-72 shrink-0 border-r border-[#27272A] bg-[#111114] h-dvh flex-col select-none text-[#E4E4E7] ${
+        isOpen ? 'flex fixed inset-y-0 left-0 z-50 shadow-2xl' : 'hidden'
+      } md:static md:flex md:shadow-none`}
+    >
+      <div className="p-6 border-b border-[#27272A] relative">
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="md:hidden absolute top-4 right-4 p-1.5 text-[#71717A] hover:text-white cursor-pointer"
+            aria-label="Close navigation"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 bg-[#D4AF37] rounded-lg flex items-center justify-center text-[#0A0A0B] font-extrabold shadow-md shadow-[#D4AF37]/10">
             <BookOpen className="w-4 h-4" />
