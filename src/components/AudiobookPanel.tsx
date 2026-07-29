@@ -12,7 +12,6 @@ import {
 } from 'lucide-react';
 import VoicePicker, { useVoiceCatalogue, voiceLabel } from './tts/VoicePicker';
 import {
-  base64ToPcm,
   concatPcm,
   downloadBlob,
   encodeMp3,
@@ -23,9 +22,23 @@ import {
   safeFileName,
   silence,
 } from '../utils/audio';
-import { planChunks, readJson, speak, SpeechError } from '../utils/speech';
+import {
+  loadEngine,
+  planChunks,
+  readJson,
+  speak,
+  SpeechError,
+  storeEngine,
+  type Engine,
+} from '../utils/speech';
 import { clearSession, loadSession, savedAgo, saveSession } from '../utils/sessionStore';
+import { KOKORO_DEFAULT_VOICE, KOKORO_VOICES } from '../utils/kokoroVoices';
 import type { ParsedDocument, ParsedSection } from '../types';
+
+const ENGINES = [
+  { id: 'kokoro' as const, label: 'Kokoro \u00b7 free', hint: 'Runs locally in your browser. No key, no quota.' },
+  { id: 'gemini' as const, label: 'Gemini \u00b7 directable', hint: 'Hosted, accepts a delivery instruction, needs a key.' },
+];
 
 const ACCEPTED = ['.docx', '.pdf', '.epub', '.txt', '.rtf'];
 
@@ -41,13 +54,14 @@ export default function AudiobookPanel() {
   const catalogue = useVoiceCatalogue();
   const [doc, setDoc] = useState<ParsedDocument | null>(null);
   const [fileName, setFileName] = useState('');
-  const [voice, setVoice] = useState('Sulafat');
+  const [voice, setVoice] = useState(() => (loadEngine() === 'kokoro' ? KOKORO_DEFAULT_VOICE : 'Sulafat'));
   const [style, setStyle] = useState('Read this warmly and unhurriedly, like an audiobook narrator');
   const [announceChapters, setAnnounceChapters] = useState(true);
   const [audio, setAudio] = useState<Record<number, ChapterAudio>>({});
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [engine, setEngine] = useState<Engine>(() => loadEngine());
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [restoring, setRestoring] = useState(true);
   const runningRef = useRef(false);
@@ -133,6 +147,12 @@ export default function AudiobookPanel() {
     return () => clearTimeout(timer);
   }, [restoring, doc, fileName, voice, style, announceChapters, audio]);
 
+  // The picker is engine-agnostic; only the catalogue behind it changes.
+  const activeCatalogue =
+    engine === 'kokoro'
+      ? { voices: KOKORO_VOICES, model: 'Kokoro-82M', available: true }
+      : catalogue;
+
   const handleFile = async (file: File) => {
     const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
     if (!ACCEPTED.includes(extension)) {
@@ -172,6 +192,9 @@ export default function AudiobookPanel() {
         const payload = await speak(chunks[piece], {
           voice,
           style,
+          engine,
+          onModelProgress: (fraction) =>
+            setStatus(`Downloading the local voice model — ${Math.round(fraction * 100)}%`),
           shouldContinue: () => runningRef.current,
           // A quota window is a wait, not a failure — say so rather than
           // leaving the run looking stalled.
@@ -179,7 +202,7 @@ export default function AudiobookPanel() {
             setStatus(`${where} · rate limited, resuming in ${secondsLeft}s`),
         });
         sampleRate = payload.sampleRate ?? sampleRate;
-        parts.push(base64ToPcm(payload.audioBase64));
+        parts.push(payload.pcm);
         if (piece < chunks.length - 1) parts.push(silence(0.4, sampleRate));
       }
 
@@ -187,7 +210,7 @@ export default function AudiobookPanel() {
       const blob = encodeWav(pcm, sampleRate);
       return { blob, seconds: pcmDurationSeconds(pcm, sampleRate) };
     },
-    [announceChapters, chapters.length, style, voice],
+    [announceChapters, chapters.length, engine, style, voice],
   );
 
   const run = async () => {
@@ -403,16 +426,20 @@ export default function AudiobookPanel() {
                 </button>
               </div>
 
-              <label className="block">
-                <span className="text-[10px] uppercase font-mono font-bold text-[#71717A] tracking-wider block mb-1.5">
-                  Delivery
-                </span>
-                <input
-                  value={style}
-                  onChange={(e) => setStyle(e.target.value)}
-                  className="w-full bg-[#0D0D10] border border-[#27272A] rounded-lg px-3 py-2 text-xs text-[#E4E4E7] focus:outline-none focus:border-[#D4AF37]/60"
-                />
-              </label>
+              {/* Kokoro takes a voice and nothing else, so offering a delivery
+                  instruction it silently ignores would be a lie. */}
+              {engine === 'gemini' && (
+                <label className="block">
+                  <span className="text-[10px] uppercase font-mono font-bold text-[#71717A] tracking-wider block mb-1.5">
+                    Delivery
+                  </span>
+                  <input
+                    value={style}
+                    onChange={(e) => setStyle(e.target.value)}
+                    className="w-full bg-[#0D0D10] border border-[#27272A] rounded-lg px-3 py-2 text-xs text-[#E4E4E7] focus:outline-none focus:border-[#D4AF37]/60"
+                  />
+                </label>
+              )}
 
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
@@ -425,12 +452,42 @@ export default function AudiobookPanel() {
               </label>
             </div>
 
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] uppercase font-mono font-bold text-[#71717A] tracking-wider w-full mb-0.5">
+                Engine
+              </span>
+              {ENGINES.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => {
+                    setEngine(option.id);
+                    storeEngine(option.id);
+                    setVoice(option.id === 'kokoro' ? KOKORO_DEFAULT_VOICE : 'Sulafat');
+                  }}
+                  title={option.hint}
+                  className={`px-2.5 py-1.5 rounded-lg text-[10px] font-semibold uppercase tracking-wider border cursor-pointer transition ${
+                    engine === option.id
+                      ? 'text-[#D4AF37] border-[#D4AF37]/40 bg-[#D4AF37]/10'
+                      : 'text-[#71717A] border-[#27272A] hover:text-[#A1A1AA]'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+              <p className="text-[10px] text-[#52525B] leading-relaxed w-full mt-1">
+                {engine === 'kokoro'
+                  ? 'Runs on this device. Free and unlimited, no key — the voice model downloads once (~90MB) and is then cached. It cannot be given a delivery instruction.'
+                  : 'Runs on Google\u2019s servers. Takes a delivery instruction, but needs an API key and is limited by its quota.'}
+              </p>
+            </div>
+
             <div>
               <h3 className="text-[10px] uppercase font-mono font-bold text-[#71717A] tracking-wider mb-2">
-                Narrator — {voiceLabel(catalogue, voice)}
+                Narrator — {voiceLabel(activeCatalogue, voice)}
               </h3>
-              {catalogue && (
-                <VoicePicker voices={catalogue.voices} value={voice} onChange={setVoice} disabled={running} />
+              {activeCatalogue && (
+                <VoicePicker voices={activeCatalogue.voices} value={voice} onChange={setVoice} disabled={running} engine={engine} />
               )}
             </div>
           </div>

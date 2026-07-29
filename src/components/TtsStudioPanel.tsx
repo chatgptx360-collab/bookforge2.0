@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, AudioLines, Check, Download, Loader2, Sparkles, Square } from 'lucide-react';
 import VoicePicker, { useVoiceCatalogue, voiceLabel } from './tts/VoicePicker';
-import { planChunks, speak } from '../utils/speech';
+import { loadEngine, planChunks, speak, storeEngine, type Engine } from '../utils/speech';
 import { loadSession, savedAgo, saveSession } from '../utils/sessionStore';
+import { KOKORO_DEFAULT_VOICE, KOKORO_VOICES } from '../utils/kokoroVoices';
 import {
-  base64ToPcm,
   concatPcm,
   downloadBlob,
   encodeMp3,
@@ -15,6 +15,11 @@ import {
   safeFileName,
   silence,
 } from '../utils/audio';
+
+const ENGINES = [
+  { id: 'kokoro' as const, label: 'Kokoro \u00b7 free', hint: 'Runs locally in your browser. No key, no quota.' },
+  { id: 'gemini' as const, label: 'Gemini \u00b7 directable', hint: 'Hosted, accepts a delivery instruction, needs a key.' },
+];
 
 const STYLE_PRESETS = [
   { label: 'Plain read', value: '' },
@@ -28,12 +33,13 @@ const STYLE_PRESETS = [
 export default function TtsStudioPanel() {
   const catalogue = useVoiceCatalogue();
   const [text, setText] = useState('');
-  const [voice, setVoice] = useState('Sulafat');
+  const [voice, setVoice] = useState(() => (loadEngine() === 'kokoro' ? KOKORO_DEFAULT_VOICE : 'Sulafat'));
   const [style, setStyle] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [audio, setAudio] = useState<{ pcm: Int16Array; sampleRate: number; url: string } | null>(null);
   const [encoding, setEncoding] = useState<string | null>(null);
+  const [engine, setEngine] = useState<Engine>(() => loadEngine());
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [restoring, setRestoring] = useState(true);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -77,6 +83,12 @@ export default function TtsStudioPanel() {
     return () => clearTimeout(timer);
   }, [restoring, text, voice, style, audio]);
 
+  // The picker is engine-agnostic; only the catalogue behind it changes.
+  const activeCatalogue =
+    engine === 'kokoro'
+      ? { voices: KOKORO_VOICES, model: 'Kokoro-82M', available: true }
+      : catalogue;
+
   const characters = text.length;
   const estimatedSeconds = Math.round(characters / 14);
 
@@ -102,11 +114,14 @@ export default function TtsStudioPanel() {
         const payload = await speak(chunks[index], {
           voice,
           style,
+          engine,
+          onModelProgress: (fraction) =>
+            setBusy(`Downloading the local voice model — ${Math.round(fraction * 100)}%`),
           shouldContinue: () => !cancelRef.current,
           onThrottled: (secondsLeft) => setBusy(`Rate limited — resuming in ${secondsLeft}s`),
         });
         sampleRate = payload.sampleRate ?? sampleRate;
-        parts.push(base64ToPcm(payload.audioBase64));
+        parts.push(payload.pcm);
         if (index < chunks.length - 1) parts.push(silence(0.35, sampleRate));
       }
 
@@ -207,29 +222,35 @@ export default function TtsStudioPanel() {
             </span>
           </div>
 
-          <label className="block">
-            <span className="text-[10px] uppercase font-mono font-bold text-[#71717A] tracking-wider block mb-1.5">
-              Delivery
-            </span>
-            <select
-              value={STYLE_PRESETS.some((preset) => preset.value === style) ? style : 'custom'}
-              onChange={(e) => setStyle(e.target.value === 'custom' ? style : e.target.value)}
-              className="w-full bg-[#0D0D10] border border-[#27272A] rounded-lg px-3 py-2 text-xs text-[#E4E4E7] cursor-pointer focus:outline-none focus:border-[#D4AF37]/60"
-            >
-              {STYLE_PRESETS.map((preset) => (
-                <option key={preset.label} value={preset.value}>
-                  {preset.label}
-                </option>
-              ))}
-              <option value="custom">Custom…</option>
-            </select>
-          </label>
-          <input
-            value={style}
-            onChange={(e) => setStyle(e.target.value)}
-            placeholder="Or describe the delivery yourself — e.g. weary, amused, almost whispering"
-            className="w-full bg-[#0D0D10] border border-[#27272A] rounded-lg px-3 py-2 text-xs text-[#E4E4E7] placeholder-[#52525B] focus:outline-none focus:border-[#D4AF37]/60"
-          />
+          {/* Kokoro takes a voice and nothing else, so a delivery instruction
+              it silently ignores has no place on screen. */}
+          {engine === 'gemini' && (
+            <>
+            <label className="block">
+              <span className="text-[10px] uppercase font-mono font-bold text-[#71717A] tracking-wider block mb-1.5">
+                Delivery
+              </span>
+              <select
+                value={STYLE_PRESETS.some((preset) => preset.value === style) ? style : 'custom'}
+                onChange={(e) => setStyle(e.target.value === 'custom' ? style : e.target.value)}
+                className="w-full bg-[#0D0D10] border border-[#27272A] rounded-lg px-3 py-2 text-xs text-[#E4E4E7] cursor-pointer focus:outline-none focus:border-[#D4AF37]/60"
+              >
+                {STYLE_PRESETS.map((preset) => (
+                  <option key={preset.label} value={preset.value}>
+                    {preset.label}
+                  </option>
+                ))}
+                <option value="custom">Custom…</option>
+              </select>
+            </label>
+            <input
+              value={style}
+              onChange={(e) => setStyle(e.target.value)}
+              placeholder="Or describe the delivery yourself — e.g. weary, amused, almost whispering"
+              className="w-full bg-[#0D0D10] border border-[#27272A] rounded-lg px-3 py-2 text-xs text-[#E4E4E7] placeholder-[#52525B] focus:outline-none focus:border-[#D4AF37]/60"
+            />
+            </>
+          )}
 
           <div className="flex gap-2">
             <button
@@ -289,11 +310,41 @@ export default function TtsStudioPanel() {
         </div>
 
         <div className="xl:col-span-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] uppercase font-mono font-bold text-[#71717A] tracking-wider w-full mb-0.5">
+              Engine
+            </span>
+            {ENGINES.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => {
+                  setEngine(option.id);
+                  storeEngine(option.id);
+                  setVoice(option.id === 'kokoro' ? KOKORO_DEFAULT_VOICE : 'Sulafat');
+                }}
+                title={option.hint}
+                className={`px-2.5 py-1.5 rounded-lg text-[10px] font-semibold uppercase tracking-wider border cursor-pointer transition ${
+                  engine === option.id
+                    ? 'text-[#D4AF37] border-[#D4AF37]/40 bg-[#D4AF37]/10'
+                    : 'text-[#71717A] border-[#27272A] hover:text-[#A1A1AA]'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+            <p className="text-[10px] text-[#52525B] leading-relaxed w-full mt-1">
+              {engine === 'kokoro'
+                ? 'Runs on this device. Free and unlimited, no key — the voice model downloads once (~90MB) and is then cached. It cannot be given a delivery instruction.'
+                : 'Runs on Google\u2019s servers. Takes a delivery instruction, but needs an API key and is limited by its quota.'}
+            </p>
+          </div>
+
           <h3 className="text-[10px] uppercase font-mono font-bold text-[#71717A] tracking-wider mb-2">
-            Voice — {voiceLabel(catalogue, voice)}
+            Voice — {voiceLabel(activeCatalogue, voice)}
           </h3>
-          {catalogue ? (
-            <VoicePicker voices={catalogue.voices} value={voice} onChange={setVoice} disabled={Boolean(busy)} />
+          {activeCatalogue ? (
+            <VoicePicker voices={activeCatalogue.voices} value={voice} onChange={setVoice} disabled={Boolean(busy)} engine={engine} />
           ) : (
             <div className="p-8 text-center border border-dashed border-[#27272A] rounded-xl">
               <Loader2 className="w-4 h-4 animate-spin text-[#52525B] mx-auto" />

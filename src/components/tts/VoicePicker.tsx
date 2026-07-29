@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Loader2, Mars, Play, Venus } from 'lucide-react';
-import { base64ToPcm, encodeWav } from '../../utils/audio';
-import { readJson, speak } from '../../utils/speech';
+import { encodeWav } from '../../utils/audio';
+import { readJson, speak, type Engine } from '../../utils/speech';
 
 export interface TtsVoice {
   /** The model's own voice name, sent with every request. */
@@ -95,11 +95,15 @@ export default function VoicePicker({
   value,
   onChange,
   disabled,
+  engine = 'gemini',
+  onModelProgress,
 }: {
   voices: TtsVoice[];
   value: string;
   onChange: (voice: string) => void;
   disabled?: boolean;
+  engine?: Engine;
+  onModelProgress?: (fraction: number, label: string) => void;
 }) {
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -111,8 +115,8 @@ export default function VoicePicker({
     try {
       // A preview is a single short line, so it should not sit waiting out a
       // quota window the way a book-length run does.
-      const payload = await speak(PREVIEW_LINE, { voice, maxRetries: 0 });
-      const audio = new Audio(URL.createObjectURL(encodeWav(base64ToPcm(payload.audioBase64), payload.sampleRate)));
+      const payload = await speak(PREVIEW_LINE, { voice, engine, maxRetries: 0, onModelProgress: onModelProgress });
+      const audio = new Audio(URL.createObjectURL(encodeWav(payload.pcm, payload.sampleRate)));
       await audio.play();
     } catch (error) {
       setPreviewError(error instanceof Error ? error.message : 'Preview failed.');

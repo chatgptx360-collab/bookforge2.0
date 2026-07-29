@@ -27,8 +27,8 @@ structured sections, read it in a typeset reader, and turn it into an audiobook.
 
 React 19 · TypeScript · Vite 6 · Tailwind CSS v4 · Motion · lucide-react ·
 Express 4 · mammoth · pdf-parse · pdf-lib · docx · adm-zip · multer ·
-`@google/genai` · JSZip · lamejs. Deploys to Vercel as a serverless function at
-`/api`.
+`@google/genai` · JSZip · lamejs · kokoro-js (Transformers.js). Deploys to Vercel
+as a serverless function at `/api`.
 
 ## Getting started
 
@@ -64,7 +64,7 @@ different Node ABI — reinstall on Node 22 LTS.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `GEMINI_API_KEY` | for AI routes | Speech synthesis and the reader's lookup |
+| `GEMINI_API_KEY` | optional | Gemini speech and the reader's lookup. Kokoro speech needs no key at all |
 | `OPENROUTER_API_KEY` | optional | Text-route fallback used when Gemini is absent, failing or out of quota |
 | `GEMINI_MODELS` | optional | Comma-separated rotation list for quota failures |
 | `GEMINI_TTS_MODEL` | optional | Defaults to `gemini-2.5-flash-preview-tts` |
@@ -131,7 +131,22 @@ Typography settings are global.
 Both speech views run on Gemini's TTS models through the same three routes, and
 both hand you a finished file rather than a stream you have to capture.
 
-**Thirty narrators, described.** `GET /api/tts/voices` returns the prebuilt voice
+**Two engines.** *Kokoro* is the default: an 82M-parameter Apache-2.0 model that
+runs entirely in the browser through WebGPU, falling back to WASM. Nothing is
+sent anywhere, there is no key and no quota, and a whole book costs nothing —
+which is the point, since a book is thousands of passages and any hosted API
+bills or throttles every one of them. The model downloads once (~90 MB on
+WebGPU's fp32 build, ~26 MB on the quantised WASM one) and the browser caches
+it. *Gemini* remains available for directed delivery. The choice persists, and
+the picker, previews and downloads work identically either way.
+
+Kokoro takes a voice and a speed and nothing else, so the Delivery box is hidden
+when it is selected rather than left there silently ignoring what you type.
+Twenty-eight voices, American and British, gendered in their own ids
+(`af_heart`, `bm_george`) and shown under their names — Heart, Michael, Emma,
+George.
+
+**Thirty Gemini narrators, described.** `GET /api/tts/voices` returns the prebuilt voice
 catalogue: a character note, a timbre (warm / clear / bright / deep), whether the
 voice reads male or female, and the concrete jobs it suits — audiobook
 narration, podcast, documentary, trailer, children's books and so on. Each row
@@ -254,7 +269,9 @@ src/components/TtsStudioPanel.tsx  Paste text → speech
 src/components/tts/        Voice catalogue hook and picker with previews
 src/components/reader/     Pagination content, panels, themes, book model
 src/utils/audio.ts         PCM stitching, WAV writer, lazy MP3 encoder
-src/utils/speech.ts        Speech client: safe parsing, quota waits, retries
+src/utils/speech.ts        Engine router: local Kokoro or hosted Gemini
+src/utils/kokoro.ts        In-browser Kokoro: device pick, model load, PCM out
+src/utils/kokoroVoices.ts  Kokoro catalogue (no model code, so it stays light)
 src/utils/sessionStore.ts  IndexedDB autosave for both speech views
 src/utils/readerStore.ts   Per-book position, bookmarks, highlights, settings
 src/utils/docxExporter.ts  Client-side KDP DOCX builder (lazy-loaded)

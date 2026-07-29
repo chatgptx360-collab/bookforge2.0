@@ -13,10 +13,29 @@
  *    turns a slow run into a broken one.
  */
 
+/**
+ * Both engines resolve to raw PCM, so callers never branch on which one ran.
+ * Gemini's base64 is decoded here rather than in every panel.
+ */
 export interface SpeechResult {
-  audioBase64: string;
-  mimeType: string;
+  pcm: Int16Array;
   sampleRate: number;
+}
+
+/**
+ * Two engines, deliberately kept side by side. Kokoro runs locally and is free
+ * without limit but cannot be directed; Gemini is directable but metered.
+ */
+export type Engine = 'kokoro' | 'gemini';
+
+export const ENGINE_STORAGE_KEY = 'bookforge.speech.engine';
+
+export function loadEngine(): Engine {
+  return localStorage.getItem(ENGINE_STORAGE_KEY) === 'gemini' ? 'gemini' : 'kokoro';
+}
+
+export function storeEngine(engine: Engine): void {
+  localStorage.setItem(ENGINE_STORAGE_KEY, engine);
 }
 
 export class SpeechError extends Error {
@@ -59,6 +78,9 @@ export async function planChunks(text: string, maxChars?: number): Promise<strin
 export interface SpeakOptions {
   voice: string;
   style?: string;
+  engine?: Engine;
+  /** Reports the one-time model download when Kokoro is loading. */
+  onModelProgress?: (fraction: number, label: string) => void;
   /** Called while waiting out a quota window, so the wait is visible. */
   onThrottled?: (secondsLeft: number, attempt: number) => void;
   /** Return false to abandon the wait — a stopped run should not keep waiting. */
@@ -83,11 +105,35 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * once.
  */
 export async function speak(text: string, options: SpeakOptions): Promise<SpeechResult> {
-  const { voice, style, onThrottled, shouldContinue, maxRetries = 6, maxServerRetries = 2 } = options;
+  const {
+    voice,
+    style,
+    engine = 'kokoro',
+    onModelProgress,
+    onThrottled,
+    shouldContinue,
+    maxRetries = 6,
+    maxServerRetries = 2,
+  } = options;
   let quotaWaits = 0;
   let serverRetries = 0;
 
   const stopped = () => Boolean(shouldContinue) && !shouldContinue!();
+
+  // Kokoro never leaves the browser, so none of the retry machinery below
+  // applies to it — there is no quota, no network and no server to fail.
+  if (engine === 'kokoro') {
+    if (stopped()) throw new SpeechError('Stopped.', 0);
+    const { speakWithKokoro } = await import('./kokoro');
+    try {
+      return await speakWithKokoro(text, voice, 1, onModelProgress);
+    } catch (error) {
+      throw new SpeechError(
+        error instanceof Error ? `Local speech failed: ${error.message}` : 'Local speech failed.',
+        0,
+      );
+    }
+  }
 
   for (;;) {
     if (stopped()) throw new SpeechError('Stopped.', 0);
@@ -107,7 +153,14 @@ export async function speak(text: string, options: SpeakOptions): Promise<Speech
       continue;
     }
 
-    if (response.ok) return (await readJson(response)) as unknown as SpeechResult;
+    if (response.ok) {
+      const payload = await readJson(response);
+      const { base64ToPcm } = await import('./audio');
+      return {
+        pcm: base64ToPcm(String(payload.audioBase64)),
+        sampleRate: Number(payload.sampleRate) || 24000,
+      };
+    }
 
     const payload: Record<string, unknown> = await readJson(response).catch((error: SpeechError) => ({
       error: error.message,
