@@ -342,3 +342,113 @@ test('validateEpubStructure reports real structural problems', () => {
 
   assert.equal(validateEpubStructure(Buffer.from('not a zip at all')).valid, false);
 });
+
+// --- manuscript translation ------------------------------------------------
+
+test('translation serialization round-trips structure and emphasis', () => {
+  const { htmlToBlocks, serializeBlocksForTranslation, parseTranslatedBlocks, blockText } =
+    require('../server-build/server.cjs');
+
+  const blocks = htmlToBlocks(`<html><body>
+    <h1>Chapter One</h1>
+    <p>The lamp was <strong>cold</strong> and the keeper was <em>gone</em>.</p>
+    <blockquote>Nothing burns forever.</blockquote>
+    <ul><li>First</li></ul>
+    <hr/>
+    <p>She climbed again.</p>
+  </body></html>`);
+
+  const wire = serializeBlocksForTranslation(blocks);
+  assert.match(wire, /^\[1\|h1\] Chapter One$/m);
+  assert.match(wire, /\[2\|p\] The lamp was <b>cold<\/b> and the keeper was <i>gone<\/i>\./);
+  assert.match(wire, /^\[5\|scene\]$/m);
+
+  // A well-formed model reply.
+  const reply = [
+    '[1|h1] Capítulo Uno',
+    '[2|p] La lámpara estaba <b>fría</b> y el farero se había <i>marchado</i>.',
+    '[3|quote] Nada arde para siempre.',
+    '[4|li] Primero',
+    '[5|scene]',
+    '[6|p] Volvió a subir.',
+  ].join('\n');
+
+  const { blocks: out, missing } = parseTranslatedBlocks(reply, blocks);
+  assert.equal(missing.length, 0);
+  assert.equal(out.length, blocks.length);
+  assert.deepEqual(out.map((b) => b.type), blocks.map((b) => b.type));
+  assert.equal(out[0].level, 1);
+  assert.equal(blockText(out[1]), 'La lámpara estaba fría y el farero se había marchado.');
+  assert.ok(out[1].runs.some((r) => r.text === 'fría' && r.bold), 'bold survives translation');
+  assert.ok(out[1].runs.some((r) => r.text === 'marchado' && r.italic), 'italic survives translation');
+  assert.equal(out[4].type, 'scene');
+});
+
+test('a dropped line keeps the source text instead of losing it', () => {
+  const { textToBlocks, parseTranslatedBlocks, blockText } = require('../server-build/server.cjs');
+  const blocks = textToBlocks('First paragraph.\nSecond paragraph.\nThird paragraph.');
+
+  // The model skipped line 2 entirely.
+  const { blocks: out, missing } = parseTranslatedBlocks('[1|p] Primer párrafo.\n[3|p] Tercer párrafo.', blocks);
+  assert.deepEqual(missing, [2]);
+  assert.equal(blockText(out[0]), 'Primer párrafo.');
+  assert.equal(blockText(out[1]), 'Second paragraph.', 'untranslated text is preserved, not dropped');
+  assert.equal(blockText(out[2]), 'Tercer párrafo.');
+});
+
+test('malformed replies degrade safely', () => {
+  const { textToBlocks, parseTranslatedBlocks, blockText } = require('../server-build/server.cjs');
+  const blocks = textToBlocks('Only one paragraph here.');
+
+  // Commentary and no tags at all.
+  const { blocks: out, missing } = parseTranslatedBlocks('Sure! Here is your translation:\nUn párrafo.', blocks);
+  assert.deepEqual(missing, [1]);
+  assert.equal(blockText(out[0]), 'Only one paragraph here.');
+
+  // Wrapped line: the tag is present but the text continues on the next line.
+  const wrapped = parseTranslatedBlocks('[1|p] Un solo\npárrafo aquí.', blocks);
+  assert.match(blockText(wrapped.blocks[0]), /Un solo/);
+});
+
+test('segment planning breaks at chapters and never splits a paragraph', () => {
+  const { textToBlocks, planTranslationSegments } = require('../server-build/server.cjs');
+  const lines = [];
+  for (let chapter = 1; chapter <= 3; chapter++) {
+    lines.push(`Chapter ${chapter}: Section ${chapter}`, '');
+    for (let p = 0; p < 6; p++) lines.push(`${'word '.repeat(120).trim()}`, '');
+  }
+  const blocks = textToBlocks(lines.join('\n'));
+  const segments = planTranslationSegments(blocks, 400);
+
+  assert.ok(segments.length >= 3, `expected several segments, got ${segments.length}`);
+  // Contiguous, gapless, and covering every block exactly once.
+  assert.equal(segments[0].startBlock, 0);
+  for (let i = 1; i < segments.length; i++) {
+    assert.equal(segments[i].startBlock, segments[i - 1].endBlock + 1, 'segments must be contiguous');
+  }
+  assert.equal(segments.at(-1).endBlock, blocks.length - 1, 'segments must cover the whole book');
+  assert.ok(segments.some((s) => /Chapter 2/.test(s.label)), 'segments are labelled by chapter');
+});
+
+test('emphasis parsing tolerates what models actually return', () => {
+  const { textToBlocks, parseTranslatedBlocks, blockText } = require('../server-build/server.cjs');
+  const blocks = textToBlocks('placeholder');
+
+  const styled = (reply) => parseTranslatedBlocks(reply, blocks).blocks[0].runs;
+
+  // Uppercase tags.
+  assert.ok(styled('[1|p] La lámpara estaba <B>fría</B>.').some((r) => r.text === 'fría' && r.bold));
+  // Spaced tags.
+  assert.ok(styled('[1|p] Estaba < i >fría</ i >.').some((r) => r.text === 'fría' && r.italic));
+  // HTML synonyms.
+  assert.ok(styled('[1|p] Estaba <strong>fría</strong> y <em>sola</em>.').some((r) => r.text === 'fría' && r.bold));
+  // Markdown instead of tags.
+  const markdown = styled('[1|p] Estaba **fría** y *sola*.');
+  assert.ok(markdown.some((r) => r.text === 'fría' && r.bold), 'markdown bold understood');
+  assert.ok(markdown.some((r) => r.text === 'sola' && r.italic), 'markdown italic understood');
+  // Unbalanced tag must not swallow the line.
+  const unbalanced = parseTranslatedBlocks('[1|p] Estaba <b>fría y sola.', blocks).blocks[0];
+  assert.equal(blockText(unbalanced), 'Estaba fría y sola.');
+  // No emphasis at all still yields clean text.
+  assert.equal(blockText(parseTranslatedBlocks('[1|p] Texto simple.', blocks).blocks[0]), 'Texto simple.');
+});

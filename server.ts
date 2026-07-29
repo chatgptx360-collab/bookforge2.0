@@ -2088,11 +2088,18 @@ const AI_ROUTES = [
   '/api/author-empire/generate-titles',
   '/api/author-empire/generate-blurb',
   '/api/author-empire/analyze-cover',
+  '/api/translate/brief',
+  '/api/translate/segment',
+  '/api/translate/polish',
 ];
 
 app.use(AI_ROUTES, rateLimit('ai', Number(process.env.AI_RATE_LIMIT ?? 40), 60 * 60 * 1000));
 app.use(
-  ['/api/book/convert', '/api/book/parse-file'],
+  ['/api/translate/segment', '/api/translate/polish'],
+  rateLimit('translate', Number(process.env.TRANSLATE_RATE_LIMIT ?? 1200), 60 * 60 * 1000),
+);
+app.use(
+  ['/api/book/convert', '/api/book/parse-file', '/api/translate/prepare', '/api/translate/export'],
   rateLimit('convert', Number(process.env.CONVERT_RATE_LIMIT ?? 120), 60 * 60 * 1000),
 );
 // The image model is the most expensive call in the app.
@@ -2668,6 +2675,571 @@ Composition: leave clean negative space in the upper third for the title treatme
     res.json({ mimeType, imageUrl: `data:${mimeType};base64,${image.imageBytes}`, prompt });
   } catch (error) {
     handleError(res, error, 'Failed to generate the cover');
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Manuscript translation
+//
+// Book-length translation fails in predictable ways: voice drifts between
+// chunks, character and place names change spelling halfway through, emphasis
+// and structure are flattened, and the prose reads like a translation. The
+// pipeline below is built around those four failures.
+// ---------------------------------------------------------------------------
+
+export interface GlossaryEntry {
+  source: string;
+  target: string;
+  note?: string;
+  /** Proper nouns and invented terms that must survive untranslated. */
+  keepAsIs?: boolean;
+}
+
+export interface TranslationBrief {
+  detectedSourceLanguage: string;
+  genre: string;
+  narrativeVoice: string;
+  register: string;
+  tense: string;
+  formality: string;
+  rhythmNotes: string;
+  culturalNotes: string;
+  translatorGuidance: string;
+  glossary: GlossaryEntry[];
+}
+
+export interface TranslationSegment {
+  index: number;
+  label: string;
+  startBlock: number;
+  endBlock: number;
+  words: number;
+}
+
+/** Typographic conventions a published book in each language is expected to follow. */
+const TYPOGRAPHY_RULES: Record<string, string> = {
+  spanish:
+    'Use « » or em dashes for dialogue as the target market expects (Latin American editions normally use em dashes), open questions and exclamations with ¿ and ¡, and never carry over English quotation marks.',
+  french:
+    'Use guillemets « » for dialogue with a non-breaking space inside them, em dashes for turns of speech, and a narrow non-breaking space before ; : ! and ?.',
+  german:
+    'Use „low-high" quotation marks, capitalise all nouns, and respect German compound formation rather than splitting into English-style noun phrases.',
+  italian:
+    'Use « » or em dashes for dialogue as the edition requires, and avoid the English habit of possessive apostrophes.',
+  portuguese: 'Use em dashes to open lines of dialogue and « » where the edition calls for quotation.',
+  japanese:
+    'Use 「」 for speech, no spaces between words, 、and 。for punctuation, and choose a consistent politeness level per speaker.',
+  korean: 'Use “ ” or 「」 as the edition requires and keep speech levels consistent per character relationship.',
+  chinese: 'Use “ ” and full-width punctuation throughout, with no spaces between characters.',
+  arabic:
+    'Use Arabic punctuation (، ؛ ؟), right-to-left ordering, and choose a consistent register between Modern Standard and the target dialect.',
+  russian: 'Use « » for quotation and em dashes to open dialogue, following Russian punctuation rules.',
+  polish: 'Use „low-high" quotation marks and em dashes for dialogue.',
+  dutch: 'Use ‘ ’ or “ ” per house style and avoid English compound spacing.',
+  hindi: 'Use Devanagari punctuation conventions, including the danda where appropriate.',
+  swahili: 'Prefer natural Swahili idiom over calques from English, and keep noun-class agreement consistent.',
+  yoruba: 'Use correct tone marks and diacritics throughout; they are not optional for a published book.',
+};
+
+function typographyFor(language: string): string {
+  const key = Object.keys(TYPOGRAPHY_RULES).find((name) => language.toLowerCase().includes(name));
+  return key
+    ? TYPOGRAPHY_RULES[key]
+    : 'Follow the punctuation and quotation conventions a published book in this language uses, not the source language conventions.';
+}
+
+const RUN_OPEN_BOLD = '<b>';
+const RUN_CLOSE_BOLD = '</b>';
+const RUN_OPEN_ITALIC = '<i>';
+const RUN_CLOSE_ITALIC = '</i>';
+
+/**
+ * Serialises blocks into numbered, tagged lines. The model only ever returns
+ * text for these lines, so block types, ordering and document structure come
+ * from our side and cannot be hallucinated away.
+ */
+export function serializeBlocksForTranslation(blocks: RichBlock[], startIndex = 0): string {
+  return blocks
+    .map((block, offset) => {
+      const id = startIndex + offset + 1;
+      if (block.type === 'scene') return `[${id}|scene]`;
+      const body = block.runs
+        .map((run) => {
+          let text = run.text;
+          if (run.italic) text = `${RUN_OPEN_ITALIC}${text}${RUN_CLOSE_ITALIC}`;
+          if (run.bold) text = `${RUN_OPEN_BOLD}${text}${RUN_CLOSE_BOLD}`;
+          return text;
+        })
+        .join('');
+      const kind = block.type === 'heading' ? `h${block.level ?? 1}` : block.type === 'quote' ? 'quote' : block.type === 'listItem' ? 'li' : 'p';
+      return `[${id}|${kind}] ${body}`;
+    })
+    .join('\n');
+}
+
+function parseTaggedRuns(text: string): RichRun[] {
+  // Models are inconsistent about emphasis: <b>, <B>, < b >, or markdown.
+  // Normalise everything to lowercase tags before parsing so nothing is lost.
+  let normalized = text
+    .replace(/<\s*(b|strong)\s*>/gi, '<b>')
+    .replace(/<\s*\/\s*(b|strong)\s*>/gi, '</b>')
+    .replace(/<\s*(i|em)\s*>/gi, '<i>')
+    .replace(/<\s*\/\s*(i|em)\s*>/gi, '</i>');
+
+  if (!/<[bi]>/.test(normalized)) {
+    normalized = normalized
+      .replace(/\*\*\*(.+?)\*\*\*/g, '<b><i>$1</i></b>')
+      .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+      .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<i>$2</i>');
+  }
+
+  // Drop an unmatched trailing opener rather than swallowing the rest of the line.
+  for (const tag of ['b', 'i'] as const) {
+    const opens = (normalized.match(new RegExp(`<${tag}>`, 'g')) ?? []).length;
+    const closes = (normalized.match(new RegExp(`</${tag}>`, 'g')) ?? []).length;
+    if (opens > closes) normalized += `</${tag}>`.repeat(opens - closes);
+    if (closes > opens) normalized = normalized.replace(new RegExp(`</${tag}>`), '');
+  }
+
+  const runs: RichRun[] = [];
+  const pattern = /<(b|i)>([\s\S]*?)<\/\1>|([^<]+)|(<[^>]*>)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(normalized)) !== null) {
+    if (match[4] !== undefined) continue; // stray tag we do not understand
+    if (match[3] !== undefined) {
+      if (match[3]) runs.push({ text: match[3] });
+      continue;
+    }
+    const inner = match[2] ?? '';
+    if (!inner) continue;
+    const nested = /<[bi]>/.test(inner);
+    runs.push({
+      text: inner.replace(/<\/?[bi]>/g, ''),
+      bold: match[1] === 'b' || nested,
+      italic: match[1] === 'i' || nested,
+    });
+  }
+
+  return runs.length > 0 ? runs : [{ text: normalized.replace(/<\/?[bi]>/g, '') }];
+}
+
+export interface ParsedTranslation {
+  blocks: RichBlock[];
+  /** Blocks the model dropped; the source text is kept so nothing is silently lost. */
+  missing: number[];
+}
+
+/**
+ * Rebuilds blocks from the model's numbered lines. Block type and order are
+ * taken from the originals, so a malformed response degrades to "this
+ * paragraph was not translated" rather than a corrupted manuscript.
+ */
+export function parseTranslatedBlocks(response: string, originals: RichBlock[], startIndex = 0): ParsedTranslation {
+  const byId = new Map<number, string>();
+  const linePattern = /^\s*\[(\d+)\|[^\]]*\]\s?([\s\S]*?)$/;
+
+  for (const rawLine of response.replace(/\r\n?/g, '\n').split('\n')) {
+    const match = rawLine.match(linePattern);
+    if (!match) continue;
+    const id = Number.parseInt(match[1], 10);
+    const existing = byId.get(id);
+    byId.set(id, existing ? `${existing} ${match[2].trim()}` : match[2].trim());
+  }
+
+  const missing: number[] = [];
+  const blocks = originals.map((original, offset) => {
+    const id = startIndex + offset + 1;
+    if (original.type === 'scene') return original;
+
+    const translated = byId.get(id);
+    if (translated === undefined || translated === '') {
+      missing.push(id);
+      return original;
+    }
+    return original.level === undefined
+      ? { type: original.type, runs: parseTaggedRuns(translated) }
+      : { type: original.type, level: original.level, runs: parseTaggedRuns(translated) };
+  });
+
+  return { blocks, missing };
+}
+
+/**
+ * Groups blocks into translation segments that never split a paragraph and
+ * prefer to break at chapter headings, so each request carries a coherent
+ * piece of prose rather than an arbitrary window.
+ */
+export function planTranslationSegments(blocks: RichBlock[], targetWords = 800): TranslationSegment[] {
+  const segments: TranslationSegment[] = [];
+  let start = 0;
+  let words = 0;
+  let label = 'Opening';
+
+  const push = (end: number) => {
+    if (end < start) return;
+    segments.push({ index: segments.length, label, startBlock: start, endBlock: end, words });
+    start = end + 1;
+    words = 0;
+  };
+
+  blocks.forEach((block, index) => {
+    const isChapterStart = block.type === 'heading' && (block.level ?? 1) <= 1;
+    if (isChapterStart && index > start) {
+      push(index - 1);
+      label = blockText(block).slice(0, 60) || `Section ${segments.length + 1}`;
+    } else if (isChapterStart) {
+      label = blockText(block).slice(0, 60) || label;
+    }
+
+    words += blockText(block).split(/\s+/).filter(Boolean).length;
+
+    if (words >= targetWords && index >= start) {
+      push(index);
+      label = `${label} (cont.)`;
+    }
+  });
+
+  if (start < blocks.length) push(blocks.length - 1);
+  return segments.filter((segment) => segment.endBlock >= segment.startBlock);
+}
+
+function glossaryTable(glossary: GlossaryEntry[]): string {
+  if (!glossary || glossary.length === 0) return 'None supplied.';
+  return glossary
+    .slice(0, 400)
+    .map((entry) =>
+      entry.keepAsIs
+        ? `- "${entry.source}" → keep exactly as "${entry.source}" (do not translate)${entry.note ? ` — ${entry.note}` : ''}`
+        : `- "${entry.source}" → always "${entry.target}"${entry.note ? ` — ${entry.note}` : ''}`,
+    )
+    .join('\n');
+}
+
+function briefSummary(brief: Partial<TranslationBrief> | undefined): string {
+  if (!brief) return 'No brief supplied — infer the voice from the passage itself.';
+  return [
+    brief.genre ? `Genre: ${brief.genre}` : '',
+    brief.narrativeVoice ? `Narrative voice: ${brief.narrativeVoice}` : '',
+    brief.register ? `Register: ${brief.register}` : '',
+    brief.tense ? `Tense and person: ${brief.tense}` : '',
+    brief.formality ? `Formality to use with the reader and between characters: ${brief.formality}` : '',
+    brief.rhythmNotes ? `Rhythm and sentence shape: ${brief.rhythmNotes}` : '',
+    brief.culturalNotes ? `Cultural handling: ${brief.culturalNotes}` : '',
+    brief.translatorGuidance ? `Author-specific guidance: ${brief.translatorGuidance}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+// --- routes ----------------------------------------------------------------
+
+/** Reads a manuscript and returns the structure a translation job runs on. */
+app.post('/api/translate/prepare', upload.single('file'), async (req, res) => {
+  const file = requireFile(req, res);
+  if (!file) return;
+  try {
+    const blocks = await extractBlocksFromFile(file.buffer, file.originalname);
+    if (blocks.length === 0) {
+      res.status(422).json({ error: 'No readable text was found in this file.' });
+      return;
+    }
+    const segments = planTranslationSegments(blocks, Number(req.body?.segmentWords) || 800);
+    const text = blocksToPlainText(blocks);
+    const structure = parseDocumentStructure(text);
+
+    res.json({
+      title:
+        structure.title && structure.title !== 'Untitled Manuscript'
+          ? structure.title
+          : baseNameOf(file.originalname),
+      author: structure.author || '',
+      blocks,
+      segments,
+      wordCount: text.split(/\s+/).filter(Boolean).length,
+      sourceFormat: formatFromName(file.originalname),
+    });
+  } catch (error) {
+    handleError(res, error, 'Failed to prepare the manuscript for translation');
+  }
+});
+
+/**
+ * Reads samples from across the book and produces the brief every later
+ * request is bound by: voice, register, formality, and the glossary that stops
+ * names and invented terms drifting between chapters.
+ */
+app.post('/api/translate/brief', async (req, res) => {
+  try {
+    const { blocks, targetLanguage, title, author, authorNotes } = req.body ?? {};
+    if (!Array.isArray(blocks) || blocks.length === 0 || !targetLanguage) {
+      res.status(400).json({ error: '"blocks" and "targetLanguage" are required.' });
+      return;
+    }
+
+    // Sample the opening, three points through the body, and the closing, so
+    // the brief reflects the whole book rather than only its first pages.
+    const typed = blocks as RichBlock[];
+    const picks = [0, 0.2, 0.45, 0.7, 0.92].map((ratio) => Math.floor(typed.length * ratio));
+    const sample = picks
+      .map((at) => typed.slice(at, at + 14).map((block) => blockText(block)).filter(Boolean).join('\n\n'))
+      .filter(Boolean)
+      .join('\n\n[...]\n\n')
+      .slice(0, 14000);
+
+    const prompt = `You are a senior literary translator preparing to translate an entire book into ${targetLanguage}. Before translating a word, you write a translation brief.
+
+BOOK: ${title || 'Untitled'}${author ? ` by ${author}` : ''}
+${authorNotes ? `AUTHOR'S INSTRUCTIONS: ${authorNotes}` : ''}
+
+SAMPLES FROM THROUGHOUT THE MANUSCRIPT:
+${sample}
+
+Produce the brief. Requirements:
+- Identify the source language, the genre, and the narrative voice precisely enough that another translator could match it.
+- State the register (how formal, how contemporary, how ornate) and the tense/person.
+- Decide the formality convention to use in ${targetLanguage} — for example tú vs usted, tu vs vous, plain vs polite forms — and say when each applies between characters. Be decisive; the whole book will follow this.
+- Describe the rhythm: sentence length variation, paragraph shape, how dialogue sounds.
+- Say how to handle culturally specific material: measurements, foods, songs, institutions, jokes, wordplay. Prefer solutions a reader in the target culture understands without footnotes.
+- Build a glossary of every proper noun, invented term, honorific and repeated distinctive phrase you can see, with the exact form to use in ${targetLanguage} every time it appears. Mark keepAsIs true for names that must not be translated. This glossary is what keeps a 300-page translation consistent, so be thorough.
+- translatorGuidance: the two or three things a translator of this specific book most needs to get right.
+
+Write the brief in English. Glossary targets must be in ${targetLanguage}.`;
+
+    const response = await generateContentWithRetry({
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            detectedSourceLanguage: { type: Type.STRING },
+            genre: { type: Type.STRING },
+            narrativeVoice: { type: Type.STRING },
+            register: { type: Type.STRING },
+            tense: { type: Type.STRING },
+            formality: { type: Type.STRING },
+            rhythmNotes: { type: Type.STRING },
+            culturalNotes: { type: Type.STRING },
+            translatorGuidance: { type: Type.STRING },
+            glossary: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  source: { type: Type.STRING },
+                  target: { type: Type.STRING },
+                  note: { type: Type.STRING },
+                  keepAsIs: { type: Type.BOOLEAN },
+                },
+                required: ['source', 'target'],
+              },
+            },
+          },
+          required: [
+            'detectedSourceLanguage',
+            'genre',
+            'narrativeVoice',
+            'register',
+            'tense',
+            'formality',
+            'rhythmNotes',
+            'culturalNotes',
+            'translatorGuidance',
+            'glossary',
+          ],
+        },
+      },
+    });
+
+    res.json(robustJsonParse(response.text ?? ''));
+  } catch (error) {
+    handleError(res, error, 'Failed to build the translation brief');
+  }
+});
+
+/** Translates one segment, bound by the brief, the glossary and its neighbours. */
+app.post('/api/translate/segment', async (req, res) => {
+  try {
+    const { blocks, startIndex = 0, targetLanguage, brief, glossary, context, authorNotes } = req.body ?? {};
+    if (!Array.isArray(blocks) || blocks.length === 0 || !targetLanguage) {
+      res.status(400).json({ error: '"blocks" and "targetLanguage" are required.' });
+      return;
+    }
+
+    const typed = blocks as RichBlock[];
+    const serialized = serializeBlocksForTranslation(typed, Number(startIndex) || 0);
+
+    const prompt = `You are an award-winning literary translator working into ${targetLanguage}. You are translating a book that will be published and read by people who will never see the original. They must experience the book as literature written for them, not as a translation.
+
+TRANSLATION BRIEF (binding):
+${briefSummary(brief)}
+
+GLOSSARY (binding — these renderings must be used exactly, every time):
+${glossaryTable(glossary ?? [])}
+
+${authorNotes ? `AUTHOR'S INSTRUCTIONS: ${authorNotes}\n` : ''}
+TYPOGRAPHY: ${typographyFor(String(targetLanguage))}
+
+${context?.precedingSource ? `THE PASSAGE IMMEDIATELY BEFORE THIS ONE, IN THE ORIGINAL:\n${String(context.precedingSource).slice(-1200)}\n` : ''}
+${context?.precedingTarget ? `YOUR TRANSLATION OF THAT PASSAGE — continue its voice, vocabulary and flow exactly:\n${String(context.precedingTarget).slice(-1200)}\n` : ''}
+${context?.followingSource ? `WHAT COMES AFTER THIS PASSAGE, IN THE ORIGINAL (for context only — do not translate it):\n${String(context.followingSource).slice(0, 600)}\n` : ''}
+
+HOW TO TRANSLATE:
+- Translate meaning, effect and voice — never word for word. If a literal rendering would sound foreign, rewrite it so a native reader feels what the original reader felt.
+- Replace idioms with the idiom a ${targetLanguage} writer would actually use. Never calque an English expression.
+- Let the syntax be ${targetLanguage} syntax. Reorder clauses freely; the original's word order carries no authority.
+- Dialogue must sound like speech in ${targetLanguage}, with that language's contractions, hesitations and register — not translated English speech.
+- Keep the author's rhythm: short sentences stay short, long ones keep their sweep, paragraph breaks stay where they are.
+- Preserve deliberate ambiguity, understatement and humour. Do not explain, expand or add footnotes.
+- Wordplay: recreate the effect in ${targetLanguage} even if the literal content must change.
+- Numbers, units and dates: use the convention of the target readership.
+
+OUTPUT FORMAT — follow exactly:
+- Return one line per input line, with the same [number|type] tag at the start.
+- Translate only the text after the tag.
+- Keep <b> and <i> tags around the words they emphasise; move them if the target word order moves.
+- Lines tagged [n|scene] must be returned unchanged as [n|scene].
+- Do not merge, split, reorder, add or omit lines. Do not add commentary.
+
+PASSAGE:
+${serialized}`;
+
+    const response = await generateContentWithRetry({ contents: prompt });
+    const raw = (response.text ?? '').trim();
+    const { blocks: translated, missing } = parseTranslatedBlocks(raw, typed, Number(startIndex) || 0);
+
+    res.json({
+      blocks: translated,
+      missing,
+      targetText: blocksToPlainText(translated),
+      untranslatedCount: missing.length,
+    });
+  } catch (error) {
+    handleError(res, error, 'Failed to translate the segment');
+  }
+});
+
+/**
+ * Second pass. The editor never sees the source, which is the point: without it
+ * there is nothing to stay loyal to, so translationese has nowhere to hide.
+ */
+app.post('/api/translate/polish', async (req, res) => {
+  try {
+    const { blocks, targetLanguage, brief, glossary, startIndex = 0 } = req.body ?? {};
+    if (!Array.isArray(blocks) || blocks.length === 0 || !targetLanguage) {
+      res.status(400).json({ error: '"blocks" and "targetLanguage" are required.' });
+      return;
+    }
+
+    const typed = blocks as RichBlock[];
+    const serialized = serializeBlocksForTranslation(typed, Number(startIndex) || 0);
+
+    const prompt = `You are a ${targetLanguage} literary editor at a serious publishing house. A novel is on your desk. You do not have any other version of it — this is simply a book in ${targetLanguage}, and your job is to make the prose excellent.
+
+WHAT THE BOOK IS MEANT TO BE:
+${briefSummary(brief)}
+
+TERMS THAT MUST NOT CHANGE (names and fixed renderings):
+${glossaryTable(glossary ?? [])}
+
+TYPOGRAPHY: ${typographyFor(String(targetLanguage))}
+
+EDIT FOR:
+- Any sentence that reads as though it were carried over from another language: unnatural word order, borrowed idioms, prepositions that are not how ${targetLanguage} says it.
+- Stiffness. Where a ${targetLanguage} writer would use a lighter construction, use it.
+- Dialogue that no one would actually speak. Make it sound like a real person of that character's age, class and mood.
+- Repetition the language does not need, and connectives that betray a foreign original.
+- Punctuation and quotation that do not follow ${targetLanguage} book conventions.
+
+DO NOT:
+- Change what happens, who says it, or what it means.
+- Add or remove sentences, imagery or information.
+- Alter any glossary term, name or place.
+- Modernise or sanitise the author's voice.
+
+OUTPUT FORMAT — follow exactly:
+- Return one line per input line, with the same [number|type] tag.
+- Keep <b> and <i> tags on the words they emphasise.
+- Lines tagged [n|scene] return unchanged.
+- No commentary.
+
+MANUSCRIPT:
+${serialized}`;
+
+    const response = await generateContentWithRetry({ contents: prompt });
+    const { blocks: polished, missing } = parseTranslatedBlocks((response.text ?? '').trim(), typed, Number(startIndex) || 0);
+
+    res.json({ blocks: polished, missing, targetText: blocksToPlainText(polished) });
+  } catch (error) {
+    handleError(res, error, 'Failed to polish the translation');
+  }
+});
+
+/** Flags glossary terms that went missing, which is how consistency actually breaks. */
+app.post('/api/translate/audit', async (req, res) => {
+  try {
+    const { blocks, sourceBlocks, glossary } = req.body ?? {};
+    if (!Array.isArray(blocks)) {
+      res.status(400).json({ error: '"blocks" is required.' });
+      return;
+    }
+
+    const targetText = blocksToPlainText(blocks as RichBlock[]).toLowerCase();
+    const sourceText = Array.isArray(sourceBlocks) ? blocksToPlainText(sourceBlocks as RichBlock[]).toLowerCase() : '';
+
+    const issues = (glossary as GlossaryEntry[] | undefined ?? [])
+      .filter((entry) => entry.source && sourceText.includes(entry.source.toLowerCase()))
+      .filter((entry) => {
+        const expected = (entry.keepAsIs ? entry.source : entry.target)?.toLowerCase();
+        return expected ? !targetText.includes(expected) : false;
+      })
+      .map((entry) => ({
+        source: entry.source,
+        expected: entry.keepAsIs ? entry.source : entry.target,
+        message: `"${entry.source}" appears in this passage but "${entry.keepAsIs ? entry.source : entry.target}" is not in the translation.`,
+      }));
+
+    res.json({ issues, checked: (glossary as GlossaryEntry[] | undefined ?? []).length });
+  } catch (error) {
+    handleError(res, error, 'Failed to audit the translation');
+  }
+});
+
+/** Assembles finished blocks into a publishable file. */
+app.post('/api/translate/export', async (req, res) => {
+  try {
+    const { blocks, format = 'docx', title, author, language } = req.body ?? {};
+    if (!Array.isArray(blocks) || blocks.length === 0) {
+      res.status(400).json({ error: 'There is nothing to export yet.' });
+      return;
+    }
+    const typed = blocks as RichBlock[];
+    const docTitle = String(title || 'Translated Manuscript');
+    const safeName = docTitle.trim().replace(/\s+/g, '_').replace(/[^\w-]/g, '') || 'translation';
+
+    switch (String(format).toLowerCase()) {
+      case 'epub': {
+        const epub = blocksToEpub(typed, docTitle, {
+          author: author ? String(author) : undefined,
+          language: language ? String(language) : undefined,
+        });
+        res.setHeader('X-Epub-Valid', String(validateEpubStructure(epub).valid));
+        sendDocument(res, epub, `${safeName}.epub`, 'epub');
+        return;
+      }
+      case 'pdf':
+        sendDocument(res, await blocksToPdf(typed, docTitle), `${safeName}.pdf`, 'pdf');
+        return;
+      case 'txt':
+        sendDocument(res, Buffer.from(blocksToPlainText(typed), 'utf8'), `${safeName}.txt`, 'txt');
+        return;
+      case 'docx':
+      default:
+        sendDocument(res, await blocksToDocx(typed, docTitle), `${safeName}.docx`, 'docx');
+    }
+  } catch (error) {
+    handleError(res, error, 'Failed to export the translation');
   }
 });
 

@@ -4,14 +4,16 @@ import Sidebar from './components/Sidebar';
 import ConverterPanel from './components/ConverterPanel';
 import ReaderEditorPanel from './components/ReaderEditorPanel';
 import StudioPanel from './components/StudioPanel';
+import TranslatePanel from './components/TranslatePanel';
 
-export type ViewId = 'converter' | 'reader' | 'studio';
+export type ViewId = 'converter' | 'reader' | 'studio' | 'translate';
 
 const ROUTES: Record<string, ViewId> = {
   '/': 'converter',
   '/converter': 'converter',
   '/reader': 'reader',
   '/studio': 'studio',
+  '/translate': 'translate',
 };
 
 function viewFromPath(pathname: string): ViewId {
@@ -71,7 +73,15 @@ export default function App() {
           </div>
         </div>
 
-        {activeView === 'reader' ? <ReaderEditorPanel /> : activeView === 'studio' ? <StudioPanel /> : <ConverterPanel />}
+        {activeView === 'reader' ? (
+          <ReaderEditorPanel />
+        ) : activeView === 'studio' ? (
+          <StudioPanel />
+        ) : activeView === 'translate' ? (
+          <TranslatePanel />
+        ) : (
+          <ConverterPanel />
+        )}
       </div>
     </div>
   );

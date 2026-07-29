@@ -1,3 +1,22 @@
+export interface RichRun {
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+}
+
+export type RichBlockType = 'heading' | 'paragraph' | 'quote' | 'listItem' | 'scene';
+
+/** The structured intermediate every converter and the translator work on. */
+export interface RichBlock {
+  type: RichBlockType;
+  level?: number;
+  runs: RichRun[];
+}
+
+export function blockText(block: RichBlock): string {
+  return block.runs.map((run) => run.text).join('');
+}
+
 export type SectionType = 'title' | 'copyright' | 'toc' | 'chapter';
 
 /** A section produced by the server-side manuscript structure parser. */

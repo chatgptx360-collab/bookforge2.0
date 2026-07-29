@@ -12,6 +12,8 @@ sections, and read it in a typeset reader.
   page, table of contents and chapters; four editor themes, three typefaces, font
   sizing, split-at-cursor, word/character counts; export to TXT, server DOCX, or a
   KDP-layout DOCX built entirely in the browser.
+- **Book Translation** (`/translate`) — upload a whole manuscript and get a
+  publishable translation back. See **Translation** below.
 - **Author Studio** (`/studio`) — translation, line editing, chapter blueprints
   and drafting, title candidates, marketing copy, cover generation and cover
   audits. Needs an AI key; everything else does not.
@@ -69,6 +71,7 @@ different Node ABI — reinstall on Node 22 LTS.
 | `AI_RATE_LIMIT` | optional | AI calls per IP per hour (default 40) |
 | `CONVERT_RATE_LIMIT` | optional | Conversions per IP per hour (default 120) |
 | `COVER_RATE_LIMIT` | optional | Cover generations per IP per hour (default 10) |
+| `TRANSLATE_RATE_LIMIT` | optional | Translation calls per IP per hour (default 1200 — a novel needs hundreds) |
 | `PORT` | optional | Defaults to `3000` |
 
 Conversion, parsing and all DOCX/EPUB/PDF/RTF export routes need **no** API key.
@@ -96,6 +99,12 @@ Mounted at `/api`, all `POST` unless noted.
 | `/api/book/export-docx` | Book project JSON | KDP-layout DOCX with front/back matter |
 | `/api/book/export-translated-docx` | `{ title, author, language, chapters[] }` | DOCX |
 | `/api/book/translate-chunk` | `{ text, targetLanguage }` | `{ translatedText }` |
+| `/api/translate/prepare` | multipart `file` | Blocks, chapter-aware segments, word count |
+| `/api/translate/brief` | `{ blocks, targetLanguage, … }` | Voice brief + binding glossary |
+| `/api/translate/segment` | `{ blocks, brief, glossary, context }` | Translated blocks, structure preserved |
+| `/api/translate/polish` | `{ blocks, brief, glossary }` | Native-editor pass, source withheld |
+| `/api/translate/audit` | `{ blocks, sourceBlocks, glossary }` | Glossary terms that went missing |
+| `/api/translate/export` | `{ blocks, format, title, author }` | DOCX / EPUB / PDF / TXT download |
 | `/api/book/lookup` | `{ text, context?, targetLanguage? }` | `{ explanation }` for the reader's lookup |
 | `/api/book/enhance-draft` | `{ text, instruction?, intensity? }` | `{ enhancedText }` |
 | `/api/book/analyze-discovery` | Concept answers | Development analysis |
@@ -126,6 +135,40 @@ e-reader rather than a styled scroll container.
 State is per book — position, bookmarks, highlights and notes are keyed by
 title + author in `localStorage`, and the 25 most recent books are retained.
 Typography settings are global.
+
+## Translation
+
+Machine translation fails a book in four predictable ways: the voice drifts
+between chunks, names and invented terms change spelling halfway through,
+structure and emphasis are flattened, and the prose reads translated. The
+pipeline is built around those failures.
+
+1. **Brief first.** `/api/translate/brief` samples five points across the whole
+   manuscript — not just the opening — and fixes the source language, genre,
+   narrative voice, register, tense, and the formality convention to use
+   (tú/usted, tu/vous, plain/polite). It also extracts a glossary of every
+   proper noun, invented term and honorific, with the exact target rendering.
+   You can edit every row and mark names "keep" so they are never translated.
+2. **Context-carrying passes.** The book is segmented at chapter boundaries,
+   never mid-paragraph. Each segment is translated with the brief and glossary
+   as binding constraints, plus the tail of the previous source *and* its
+   finished translation, so voice and vocabulary continue across the seam.
+   Prompts direct the translator to reorder clauses into target syntax, replace
+   idioms with native equivalents, keep dialogue speakable, and follow that
+   language's punctuation conventions (guillemets, ¿ ¡, 「」, danda).
+3. **Native-editor pass.** `/api/translate/polish` re-reads each segment
+   *without the source*. With nothing to be loyal to, translationese has
+   nowhere to hide; the editor is told to fix borrowed idiom, foreign word
+   order and unspeakable dialogue while leaving meaning and names untouched.
+4. **Structure is never at the model's mercy.** Blocks are sent as numbered,
+   tagged lines; block types and order come from our side. A dropped line keeps
+   its source text rather than vanishing, and emphasis is recovered whether the
+   model returns `<b>`, `<B>`, `<strong>` or `**markdown**`.
+
+Jobs live in IndexedDB, so a book-length run survives a refresh and resumes
+where it stopped; failed segments can be retried individually. Export to DOCX,
+EPUB, PDF or TXT at any point — untranslated sections fall back to the original,
+so an early export is still a complete book.
 
 ## Conversion notes
 
