@@ -319,7 +319,13 @@ test('EPUB accepts a cover and store metadata', () => {
   assert.match(opf, /belongs-to-collection/);
   assert.match(opf, /<itemref idref="cover"\/>/);
 
-  assert.deepEqual(validateEpubStructure(epub), { valid: true, errors: [], warnings: [] });
+  assert.deepEqual(validateEpubStructure(epub), {
+    valid: true,
+    epubVersion: '3.0',
+    isEpub3: true,
+    errors: [],
+    warnings: [],
+  });
 });
 
 test('validateEpubStructure reports real structural problems', () => {
@@ -451,4 +457,58 @@ test('emphasis parsing tolerates what models actually return', () => {
   assert.equal(blockText(unbalanced), 'Estaba fría y sola.');
   // No emphasis at all still yields clean text.
   assert.equal(blockText(parseTranslatedBlocks('[1|p] Texto simple.', blocks).blocks[0]), 'Texto simple.');
+});
+
+test('EPUB output is declared 3.0 and free of EPUB 2 constructs', () => {
+  const { convertTextToEpub, validateEpubStructure } = require('../server-build/server.cjs');
+  const AdmZip = require('adm-zip');
+
+  const epub = convertTextToEpub('Chapter 1: Alpha\n\nBody text here.', 'Version Test', 'Tester');
+  const opf = new AdmZip(epub).readAsText('OEBPS/content.opf');
+
+  // Retailers read this attribute; EPUB 3.x always declares exactly "3.0".
+  assert.match(opf, /<package[^>]*version="3\.0"/);
+  assert.ok(!/<spine[^>]*\btoc=/i.test(opf), 'no EPUB 2 spine toc attribute');
+  assert.ok(!/<guide[\s>]/i.test(opf), 'no EPUB 2 guide element');
+  assert.match(opf, /<meta property="dcterms:modified">/);
+
+  const check = validateEpubStructure(epub);
+  assert.equal(check.epubVersion, '3.0');
+  assert.equal(check.isEpub3, true);
+  assert.equal(check.valid, true);
+  assert.deepEqual(check.errors, []);
+});
+
+test('an EPUB 2 package is rejected, not quietly accepted', () => {
+  const { createZipArchive, validateEpubStructure } = require('../server-build/server.cjs');
+
+  const opf = `<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="BookID">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="BookID">urn:uuid:x</dc:identifier>
+    <dc:title>Old Book</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine toc="ncx"><itemref idref="ch1"/></spine>
+  <guide><reference type="text" href="ch1.xhtml"/></guide>
+</package>`;
+
+  const epub2 = createZipArchive([
+    { name: 'mimetype', data: Buffer.from('application/epub+zip'), store: true },
+    {
+      name: 'META-INF/container.xml',
+      data: Buffer.from('<?xml version="1.0"?><container><rootfiles><rootfile full-path="content.opf"/></rootfiles></container>'),
+    },
+    { name: 'content.opf', data: Buffer.from(opf) },
+    { name: 'ch1.xhtml', data: Buffer.from('<html><body><p>Old</p></body></html>') },
+    { name: 'toc.ncx', data: Buffer.from('<ncx/>') },
+  ]);
+
+  const check = validateEpubStructure(epub2);
+  assert.equal(check.epubVersion, '2.0');
+  assert.equal(check.isEpub3, false);
+  assert.equal(check.valid, false);
+  assert.ok(check.errors.some((e) => /EPUB 3\.0 will reject it/.test(e)), check.errors.join(' | '));
+  assert.ok(check.warnings.some((w) => /guide/.test(w)));
+  assert.ok(check.warnings.some((w) => /toc attribute/.test(w)));
 });

@@ -1440,6 +1440,9 @@ export function convertTextToEpub(text: string, title = 'Converted Book', author
 
 export interface EpubValidation {
   valid: boolean;
+  /** The version declared in the OPF package element, e.g. "3.0". */
+  epubVersion: string | null;
+  isEpub3: boolean;
   errors: string[];
   warnings: string[];
 }
@@ -1452,6 +1455,7 @@ export interface EpubValidation {
 export function validateEpubStructure(buffer: Buffer): EpubValidation {
   const errors: string[] = [];
   const warnings: string[] = [];
+  let epubVersion: string | null = null;
 
   try {
     // The mimetype entry must be first, stored, and exact.
@@ -1471,20 +1475,27 @@ export function validateEpubStructure(buffer: Buffer): EpubValidation {
     const container = read('META-INF/container.xml');
     if (!container) {
       errors.push('META-INF/container.xml is missing.');
-      return { valid: false, errors, warnings };
+      return { valid: false, epubVersion, isEpub3: false, errors, warnings };
     }
 
     const opfPath = container.match(/full-path="([^"]+)"/i)?.[1];
     if (!opfPath || !names.has(opfPath)) {
       errors.push('container.xml does not point at an existing package document.');
-      return { valid: false, errors, warnings };
+      return { valid: false, epubVersion, isEpub3: false, errors, warnings };
     }
 
     const opf = read(opfPath) ?? '';
     const opfDir = path.posix.dirname(opfPath);
     const resolveHref = (href: string) => (opfDir === '.' ? href : path.posix.join(opfDir, href));
 
-    if (!/version="3\.\d+"/.test(opf)) errors.push('The package is not declared as EPUB 3.');
+    epubVersion = opf.match(/<package[^>]*\bversion="([^"]+)"/i)?.[1] ?? null;
+    if (epubVersion !== '3.0') {
+      errors.push(
+        epubVersion
+          ? `This package declares EPUB ${epubVersion}. Retailers that require EPUB 3.0 will reject it.`
+          : 'The package element declares no version, so no reader can tell which EPUB standard it follows.',
+      );
+    }
     if (!/<dc:title>/.test(opf)) errors.push('dc:title is missing from the metadata.');
     if (!/<dc:language>/.test(opf)) errors.push('dc:language is missing from the metadata.');
     if (!/<dc:identifier/.test(opf)) errors.push('dc:identifier is missing from the metadata.');
@@ -1525,7 +1536,16 @@ export function validateEpubStructure(buffer: Buffer): EpubValidation {
     }
 
     if ([...names].some((name) => name.toLowerCase().endsWith('.ncx'))) {
-      warnings.push('An NCX file is present; EPUB 3 readers do not need one.');
+      warnings.push('An NCX file is present. EPUB 3 does not need one, and some validators flag it.');
+    }
+    if (/<spine[^>]*\btoc=/i.test(opf)) {
+      warnings.push('The spine still carries an EPUB 2 toc attribute pointing at an NCX.');
+    }
+    if (/<guide[\s>]/i.test(opf)) {
+      warnings.push('The package contains an EPUB 2 <guide> element; EPUB 3 uses a landmarks nav instead.');
+    }
+    if (!/<meta[^>]+property="dcterms:modified"/i.test(opf)) {
+      warnings.push('dcterms:modified should be a meta property element in EPUB 3.');
     }
     if (![...manifestEntries.values()].some((href) => /cover/i.test(href))) {
       warnings.push('No cover image is declared. Most stores expect one.');
@@ -1534,7 +1554,7 @@ export function validateEpubStructure(buffer: Buffer): EpubValidation {
     errors.push(error instanceof Error ? error.message : 'The archive could not be read.');
   }
 
-  return { valid: errors.length === 0, errors, warnings };
+  return { valid: errors.length === 0, epubVersion, isEpub3: epubVersion === '3.0', errors, warnings };
 }
 
 const WINANSI_SUBSTITUTIONS: Record<string, string> = {
@@ -2213,8 +2233,9 @@ app.post('/api/book/convert', convertUpload, async (req, res) => {
         const check = validateEpubStructure(epub);
         // Surfaced in the UI as a validation badge on the download card.
         res.setHeader('X-Epub-Valid', String(check.valid));
+        res.setHeader('X-Epub-Version', check.epubVersion ?? 'unknown');
         if (check.warnings.length > 0) res.setHeader('X-Epub-Warnings', String(check.warnings.length));
-        res.setHeader('Access-Control-Expose-Headers', 'X-Epub-Valid, X-Epub-Warnings');
+        res.setHeader('Access-Control-Expose-Headers', 'X-Epub-Valid, X-Epub-Version, X-Epub-Warnings');
         sendDocument(res, epub, fileName, targetFormat);
         return;
       }

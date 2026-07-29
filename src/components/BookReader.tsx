@@ -39,6 +39,7 @@ import {
   type FlatParagraph,
 } from './reader/content';
 import { READER_THEMES } from './reader/theme';
+import { loadVoices, pickDefaultVoice, planNarration } from './reader/narrator';
 
 export type { BookReaderChapter };
 
@@ -128,6 +129,17 @@ export default function BookReader({ title, author, chapters, onClose }: BookRea
   const hits = useMemo(() => (panel === 'search' ? searchBook(model, query) : []), [panel, query, model]);
   // Hidden after the server reports no AI provider, so the menu stops offering it.
   const [lookupAvailable, setLookupAvailable] = useState(true);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadVoices().then((available) => {
+      if (!cancelled) setVoices(available);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // ---- persistence --------------------------------------------------------
   useEffect(() => saveSettings(settings), [settings]);
@@ -444,34 +456,48 @@ export default function BookReader({ title, author, chapters, onClose }: BookRea
   const startSpeaking = useCallback(() => {
     if (!('speechSynthesis' in window) || !currentParagraph) return;
     speakingRef.current = true;
+    window.speechSynthesis.cancel();
 
-    const queue = model.paragraphs.filter(
-      (p) => p.kind !== 'scene' && p.wordsBefore >= currentParagraph.wordsBefore,
-    );
+    const remaining = model.paragraphs.filter((p) => p.wordsBefore >= currentParagraph.wordsBefore);
+    const plan = planNarration(remaining, settings);
+    const voice =
+      voices.find((candidate) => candidate.voiceURI === settings.voiceURI) ??
+      pickDefaultVoice(voices, navigator.language || 'en');
 
     const speakAt = (index: number) => {
-      if (!speakingRef.current || index >= queue.length) {
+      if (!speakingRef.current || index >= plan.length) {
         stopSpeaking();
         return;
       }
-      const paragraph = queue[index];
-      setSpeakingKey(paragraph.key);
-      const targetPage = pageMapRef.current.get(paragraph.key);
+      const chunk = plan[index];
+      setSpeakingKey(chunk.paragraphKey);
+
+      // Keep the page in step with the voice.
+      const targetPage = pageMapRef.current.get(chunk.paragraphKey);
       if (paged && targetPage !== undefined) setPage(targetPage);
       else if (!paged) {
-        const node = contentRef.current?.querySelector<HTMLElement>(`#${CSS.escape(paragraph.key)}`);
+        const node = contentRef.current?.querySelector<HTMLElement>(`#${CSS.escape(chunk.paragraphKey)}`);
         if (node) viewportRef.current?.scrollTo({ top: Math.max(0, node.offsetTop - 24), behavior: 'smooth' });
       }
 
-      const utterance = new SpeechSynthesisUtterance(paragraph.text);
-      utterance.rate = 1;
-      utterance.onend = () => speakAt(index + 1);
+      const utterance = new SpeechSynthesisUtterance(chunk.text);
+      if (voice) {
+        utterance.voice = voice;
+        utterance.lang = voice.lang;
+      }
+      utterance.rate = chunk.rate;
+      utterance.pitch = chunk.pitch;
+      utterance.onend = () => {
+        if (!speakingRef.current) return;
+        if (chunk.pauseAfter > 0) window.setTimeout(() => speakAt(index + 1), chunk.pauseAfter);
+        else speakAt(index + 1);
+      };
       utterance.onerror = () => stopSpeaking();
       window.speechSynthesis.speak(utterance);
     };
 
     speakAt(0);
-  }, [currentParagraph, model.paragraphs, paged, stopSpeaking]);
+  }, [currentParagraph, model.paragraphs, paged, settings, stopSpeaking, voices]);
 
   useEffect(() => () => stopSpeaking(), [stopSpeaking]);
 
@@ -827,7 +853,7 @@ export default function BookReader({ title, author, chapters, onClose }: BookRea
                 />
               )}
               {panel === 'settings' && (
-                <SettingsPanel settings={settings} theme={theme} onChange={updateSettings} />
+                <SettingsPanel settings={settings} theme={theme} onChange={updateSettings} voices={voices} />
               )}
             </div>
           </aside>

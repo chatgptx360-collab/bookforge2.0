@@ -2,6 +2,7 @@ import { Bookmark as BookmarkIcon, Highlighter, Search, Trash2, X } from 'lucide
 import type { Annotation, Bookmark, HighlightColor, ReaderSettings } from '../../utils/readerStore';
 import { formatDuration, type BookModel, type ChapterMeta, type FlatParagraph, type SearchHit } from './content';
 import { HIGHLIGHT_COLORS, READER_FONTS, READER_THEMES, type ReaderTheme } from './theme';
+import { rankVoices } from './narrator';
 
 const FONT_SIZES = { min: 14, max: 30, step: 1 };
 const LINE_HEIGHTS = [1.4, 1.55, 1.65, 1.8, 2.0];
@@ -252,11 +253,31 @@ export function SettingsPanel({
   settings,
   theme,
   onChange,
+  voices = [],
 }: {
   settings: ReaderSettings;
   theme: ReaderTheme;
   onChange: (patch: Partial<ReaderSettings>) => void;
+  voices?: SpeechSynthesisVoice[];
 }) {
+  const ranked = rankVoices(voices, typeof navigator === 'undefined' ? 'en' : navigator.language || 'en');
+
+  const previewVoice = () => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(
+      'She climbed the last of the stair, and the lamp turned once, as if it had been waiting for her.',
+    );
+    const voice = voices.find((candidate) => candidate.voiceURI === settings.voiceURI) ?? ranked[0]?.voice;
+    if (voice) {
+      utterance.voice = voice;
+      utterance.lang = voice.lang;
+    }
+    utterance.rate = settings.rate;
+    utterance.pitch = settings.pitch;
+    window.speechSynthesis.speak(utterance);
+  };
+
   const label = (text: string) => (
     <div
       style={{
@@ -403,6 +424,84 @@ export function SettingsPanel({
             Justified
           </button>
         </div>
+      </section>
+
+      <section>
+        {label('Narration voice')}
+        {ranked.length === 0 ? (
+          <p style={{ fontSize: 11, color: theme.muted, lineHeight: 1.6 }}>
+            This browser exposes no speech voices. Chrome, Edge and Safari all ship them; Firefox needs system
+            voices installed.
+          </p>
+        ) : (
+          <>
+            <select
+              value={settings.voiceURI ?? ranked[0]?.voice.voiceURI ?? ''}
+              onChange={(e) => onChange({ voiceURI: e.target.value })}
+              className="w-full rounded-lg px-2 py-2 cursor-pointer"
+              style={{
+                fontSize: 11,
+                color: theme.chromeText,
+                background: theme.canvas,
+                border: `1px solid ${theme.rule}`,
+              }}
+              aria-label="Narration voice"
+            >
+              {ranked.map((entry) => (
+                <option key={entry.voice.voiceURI} value={entry.voice.voiceURI}>
+                  {entry.label}
+                </option>
+              ))}
+            </select>
+            <p style={{ fontSize: 10, color: theme.muted, marginTop: 6, lineHeight: 1.5 }}>
+              Voices marked Natural are the neural ones — they carry a book far better than the standard set.
+            </p>
+
+            <div className="mt-3 space-y-2">
+              <div>
+                <div style={{ fontSize: 10, color: theme.muted, marginBottom: 4 }}>Pace — {settings.rate.toFixed(2)}×</div>
+                <input
+                  type="range"
+                  min={0.6}
+                  max={1.6}
+                  step={0.02}
+                  value={settings.rate}
+                  onChange={(e) => onChange({ rate: Number(e.target.value) })}
+                  className="w-full cursor-pointer"
+                  style={{ accentColor: theme.accent }}
+                  aria-label="Narration pace"
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: theme.muted, marginBottom: 4 }}>Pitch — {settings.pitch.toFixed(2)}</div>
+                <input
+                  type="range"
+                  min={0.6}
+                  max={1.4}
+                  step={0.02}
+                  value={settings.pitch}
+                  onChange={(e) => onChange({ pitch: Number(e.target.value) })}
+                  className="w-full cursor-pointer"
+                  style={{ accentColor: theme.accent }}
+                  aria-label="Narration pitch"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-3 flex-wrap">
+              <button type="button" onClick={() => onChange({ expressive: !settings.expressive })} style={chip(settings.expressive)}>
+                Narrator pacing
+              </button>
+              <button type="button" onClick={previewVoice} style={chip(false)}>
+                Hear a line
+              </button>
+            </div>
+            <p style={{ fontSize: 10, color: theme.muted, marginTop: 6, lineHeight: 1.5 }}>
+              Narrator pacing adds breath at paragraph ends, a real gap at scene breaks, and lifts the voice for
+              dialogue and questions.
+            </p>
+          </>
+        )}
       </section>
 
       <section>

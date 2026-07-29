@@ -29,6 +29,7 @@ interface ConvertedFile {
   finalName: string;
   timestamp: string;
   epubValid: boolean | null;
+  epubVersion: string | null;
 }
 
 interface FileProgress {
@@ -84,6 +85,8 @@ interface ConversionResult {
   blob: Blob;
   /** Structural EPUB check reported by the server, when the target was EPUB. */
   epubValid: boolean | null;
+  /** Version declared in the package document, e.g. "3.0". */
+  epubVersion: string | null;
 }
 
 function convertFile(
@@ -122,7 +125,11 @@ function convertFile(
       if (xhr.status >= 200 && xhr.status < 300) {
         onProgress(100);
         const header = xhr.getResponseHeader('X-Epub-Valid');
-        resolve({ blob: xhr.response as Blob, epubValid: header === null ? null : header === 'true' });
+        resolve({
+          blob: xhr.response as Blob,
+          epubValid: header === null ? null : header === 'true',
+          epubVersion: xhr.getResponseHeader('X-Epub-Version'),
+        });
         return;
       }
       let message = `Failed to convert ${file.name} (HTTP ${xhr.status})`;
@@ -259,7 +266,7 @@ export default function ConverterPanel() {
       updateProgress(i, { status: 'converting', percent: 5 });
 
       try {
-        const { blob, epubValid } = await convertFile(
+        const { blob, epubValid, epubVersion } = await convertFile(
           f,
           targetFormat,
           targetFormat === 'epub' ? epubDetails : null,
@@ -288,6 +295,7 @@ export default function ConverterPanel() {
               second: '2-digit',
             }),
             epubValid,
+            epubVersion,
           },
           ...prev,
         ]);
@@ -371,8 +379,9 @@ export default function ConverterPanel() {
           Universal Book &amp; File Converter
         </h1>
         <p className="text-sm text-[#71717A] max-w-xl mt-1 leading-relaxed">
-          Upload any text, book, or manuscript document and turn it into clean DOCX, PDF, EPUB 3.0, TXT, or RTF
-          with correct formatting.
+          Upload any text, book, or manuscript document and turn it into clean DOCX, PDF, EPUB, TXT, or RTF with
+          correct formatting. Every EPUB is written to <span className="text-[#D4AF37]">EPUB 3.0</span> — the
+          version retailers such as KDP, Apple Books and Kobo require — and structurally checked before download.
         </p>
       </header>
 
@@ -791,7 +800,9 @@ export default function ConverterPanel() {
                             }
                           >
                             {item.epubValid ? <ShieldCheck className="w-2.5 h-2.5" /> : <ShieldAlert className="w-2.5 h-2.5" />}
-                            {item.epubValid ? 'EPUB 3 valid' : 'Check failed'}
+                            {item.epubValid
+                              ? `EPUB ${item.epubVersion ?? '3.0'} valid`
+                              : `EPUB ${item.epubVersion ?? '?'} — check failed`}
                           </span>
                         )}
                         <span className="text-[10px] text-[#71717A] font-mono block mt-0.5">

@@ -20,6 +20,14 @@ export interface ReaderSettings {
   mode: ReaderMode;
   /** Words per minute used for "time left" estimates. */
   wpm: number;
+  /** Narration voice, chosen from the browser's installed voices. */
+  voiceURI: string | null;
+  /** Speaking rate, 0.6–1.6. */
+  rate: number;
+  /** Voice pitch, 0.6–1.4. */
+  pitch: number;
+  /** Adds narrator pacing: pauses at paragraph, scene and chapter breaks. */
+  expressive: boolean;
 }
 
 export interface ReaderPosition {
@@ -71,6 +79,10 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   justify: true,
   mode: 'paged',
   wpm: 230,
+  voiceURI: null,
+  rate: 0.98,
+  pitch: 1,
+  expressive: true,
 };
 
 export const EMPTY_BOOK_STATE: BookState = {

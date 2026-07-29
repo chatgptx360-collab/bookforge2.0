@@ -130,7 +130,8 @@ e-reader rather than a styled scroll container.
 | Navigation | Contents panel with per-chapter word counts and time estimates, in-book search with context snippets, page turns by key/click zone/footer arrows |
 | Annotations | Bookmarks and four-colour highlights with attached notes, listed in a side panel, click to jump |
 | Progress | Percent read, time left in chapter and in book (adjustable wpm), page X of Y, chapter ticks on the progress bar |
-| Extras | Read-aloud via the Web Speech API, immersive mode, dictionary/context lookup on any selection (needs an AI key), full keyboard control with a `?` shortcut sheet |
+| Narration | Sentence-level delivery with narrator pacing: breath at paragraph ends, a real gap at scene breaks, a slower read into chapter headings, and a lift for dialogue and questions. Voices are ranked so neural ones default to the top; pace and pitch are adjustable and persist |
+| Extras | Immersive mode, dictionary/context lookup on any selection (needs an AI key), full keyboard control with a `?` shortcut sheet |
 
 State is per book — position, bookmarks, highlights and notes are keyed by
 title + author in `localStorage`, and the 25 most recent books are retained.
@@ -172,8 +173,12 @@ so an early export is still a complete book.
 
 ## Conversion notes
 
-- **EPUB output is EPUB 3.0 and passes EPUBCheck 5.2.1 with zero errors or
-  warnings.** No NCX; a `nav.xhtml` with `epub:type="toc"` plus a landmarks nav; a
+- **EPUB output is always EPUB 3.0** — the version KDP, Apple Books and Kobo
+  require — and passes EPUBCheck 5.2.1 with zero errors or warnings. The
+  package element declares `version="3.0"`, and the built-in validator reports
+  the declared version, fails anything that is not 3.0, and flags EPUB 2
+  leftovers (`<guide>`, a spine `toc` attribute, a stray NCX). The converter
+  shows the result as an "EPUB 3.0 valid" badge on each download. No NCX; a `nav.xhtml` with `epub:type="toc"` plus a landmarks nav; a
   stylesheet; and a `mimetype` entry written first and stored uncompressed. The
   archive is produced by a small purpose-built ZIP writer (`createZipArchive`)
   because `adm-zip` cannot emit a stored entry.
