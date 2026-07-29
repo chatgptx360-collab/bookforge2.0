@@ -669,3 +669,74 @@ test('a software adapter is not mistaken for a graphics card', async () => {
   // A throwing requestAdapter must not take the page down with it.
   assert.equal((await inspectGpu(scope({ requestAdapter: async () => { throw new Error('no'); } }))).usable, false);
 });
+
+// --- front matter -----------------------------------------------------------
+//
+// A store rejected a generated EPUB for "excessive duplication of text,
+// including the title, table of contents, and chapter headings at the
+// beginning of the book". The manuscript's own title page and typed contents
+// were being kept alongside the ones the EPUB generates for itself.
+
+test('the book does not open by repeating itself', () => {
+  const { convertTextToEpub, extractEpubText } = require('../server-build/server.cjs');
+  const source = [
+    'Ghost Signal', 'A Novel', 'by A. Writer', '',
+    'Copyright 2026 by A. Writer', 'All rights reserved.', '',
+    'Table of Contents',
+    'Chapter 1: The Signal ..... 1',
+    'Chapter 2: The Answer ..... 20', '',
+    'Chapter 1: The Signal', '', 'Thorne stared at the console.', '',
+    'Chapter 2: The Answer', '', 'VERNA said nothing for a long moment.',
+  ].join('\n');
+
+  const text = extractEpubText(convertTextToEpub(source, 'Ghost Signal', 'A. Writer'));
+  const occurrences = (needle) => text.split(needle).length - 1;
+
+  assert.equal(occurrences('Ghost Signal'), 1, `title appears ${occurrences('Ghost Signal')} times`);
+  // Counted as a line of its own: the author's name inside the copyright
+  // notice is content, not a repeat of the title page.
+  const lines = text.split('\n').map((line) => line.trim());
+  assert.equal(lines.filter((line) => line === 'A. Writer').length, 1, 'the author line is repeated');
+  assert.equal(lines.filter((line) => line === 'by A. Writer').length, 0, 'the typed byline survived');
+  assert.equal(occurrences('Chapter 1: The Signal'), 1, 'the chapter heading is repeated');
+
+  // The typed contents duplicates the nav and is meaningless in a reflowable
+  // book, where there are no page numbers.
+  assert.ok(!text.includes('Table of Contents'), 'the typed contents survived');
+  assert.ok(!text.includes('.....'), 'dot leaders survived');
+
+  // Real content must be untouched.
+  assert.match(text, /A Novel/);
+  assert.match(text, /Copyright 2026 by A\. Writer/);
+  assert.match(text, /All rights reserved\./);
+  assert.match(text, /Thorne stared at the console\./);
+  assert.match(text, /VERNA said nothing for a long moment\./);
+});
+
+test('front matter cleanup cannot reach into the book', () => {
+  const { convertTextToEpub, extractEpubText } = require('../server-build/server.cjs');
+  // A chapter that legitimately discusses contents pages and repeats the title.
+  const source = [
+    'The Index', 'by R. Shelf', '',
+    'Chapter 1: Beginnings', '',
+    'She read the Table of Contents aloud, twice.',
+    'The Index was the only book on the shelf.',
+    'Entry 4 ..... 12 was circled in red.',
+  ].join('\n');
+
+  const text = extractEpubText(convertTextToEpub(source, 'The Index', 'R. Shelf'));
+  assert.match(text, /She read the Table of Contents aloud, twice\./);
+  assert.match(text, /The Index was the only book on the shelf\./);
+  assert.match(text, /Entry 4 \.{5} 12 was circled in red\./);
+});
+
+test('a book with no front matter is unchanged', () => {
+  const { convertTextToEpub, extractEpubText, validateEpubStructure } = require('../server-build/server.cjs');
+  const source = 'Chapter 1: Alone\n\nIt began without ceremony.\n\nChapter 2: Together\n\nAnd ended the same way.';
+  const epub = convertTextToEpub(source, 'Plain', 'Nobody');
+
+  const text = extractEpubText(epub);
+  assert.match(text, /It began without ceremony\./);
+  assert.match(text, /And ended the same way\./);
+  assert.equal(validateEpubStructure(epub).valid, true);
+});

@@ -242,6 +242,15 @@ the status and what the server actually said.
   stylesheet; and a `mimetype` entry written first and stored uncompressed. The
   archive is produced by a small purpose-built ZIP writer (`createZipArchive`)
   because `adm-zip` cannot emit a stored entry.
+- **The book does not open by repeating itself.** A manuscript usually carries
+  its own typed title page and table of contents, and the EPUB generates both
+  for real — a title page from the metadata, and a navigation document. Keeping
+  the typed versions printed the title three times and listed chapters with dot
+  leaders and page numbers that mean nothing in a reflowable book; one store
+  rejected an export for exactly that. The typed title, byline and contents list
+  are dropped, and front matter with no heading of its own no longer gets one
+  invented. Only the region before the first chapter heading is touched, so a
+  chapter that happens to discuss a contents page keeps every word.
 - **PDF output** uses pdf-lib's standard Helvetica, which only encodes WinAnsi.
   Typographic characters (curly quotes, dashes, ellipses, ligatures) are mapped to
   safe equivalents and anything else is dropped, so a manuscript with smart quotes

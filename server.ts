@@ -1165,9 +1165,72 @@ nav ol { list-style: none; padding-left: 0; line-height: 2; }
 interface EpubChapter {
   title: string;
   blocks: RichBlock[];
+  /** Front matter that had no heading of its own; naming it in the nav is
+   *  enough, printing a heading would repeat the book's title. */
+  synthetic?: boolean;
 }
 
 /** Splits a block stream into chapters at top-level headings. */
+
+/**
+ * Removes front matter the EPUB is about to provide for itself.
+ *
+ * A manuscript usually opens with its own title page and a table of contents
+ * typed out as text. The generated book adds a real title page and a real
+ * navigation document, so keeping the typed versions prints the title three
+ * times and lists chapters with dot leaders and page numbers that mean nothing
+ * in a reflowable book. Stores read that as padding: one rejection called it
+ * "excessive duplication of text, including the title, table of contents, and
+ * chapter headings at the beginning of the book".
+ *
+ * Only the region before the first chapter heading is touched, so nothing in
+ * the body of the book can be caught by this.
+ */
+function stripRedundantFrontMatter(blocks: RichBlock[], title: string, author: string): RichBlock[] {
+  const firstHeading = blocks.findIndex((block) => block.type === 'heading');
+  const frontEnd = firstHeading === -1 ? blocks.length : firstHeading;
+
+  const normalise = (value: string) => value.trim().replace(/\s+/g, ' ').toLowerCase();
+  const titleText = normalise(title);
+  const authorText = normalise(author);
+  const restatesTitle = new Set(
+    [titleText, authorText, `by ${authorText}`, `${titleText} by ${authorText}`].filter((v) => v && v !== 'by '),
+  );
+
+  // A contents entry: dot leaders, or a heading-ish line ending in a page number.
+  const looksLikeTocEntry = (line: string) =>
+    /\.{3,}\s*\d+\s*$/.test(line) ||
+    /^\s*(chapter|part|section|book)\b.*?\s\d+\s*$/i.test(line) ||
+    /^\s*(prologue|epilogue|introduction|foreword|preface|afterword)\b.*?\s\d+\s*$/i.test(line);
+
+  const drop = new Set<number>();
+
+  for (let index = 0; index < frontEnd; index++) {
+    const line = blockText(blocks[index]).trim();
+    if (!line) continue;
+
+    // The typed title page, which the generated one replaces.
+    if (restatesTitle.has(normalise(line))) {
+      drop.add(index);
+      continue;
+    }
+
+    // A typed contents list, which the nav document replaces.
+    if (/^(table of contents|contents)$/i.test(line)) {
+      drop.add(index);
+      for (let ahead = index + 1; ahead < frontEnd; ahead++) {
+        const entry = blockText(blocks[ahead]).trim();
+        if (!entry) { drop.add(ahead); continue; }
+        if (!looksLikeTocEntry(entry)) break;
+        drop.add(ahead);
+        index = ahead;
+      }
+    }
+  }
+
+  return drop.size === 0 ? blocks : blocks.filter((_, index) => !drop.has(index));
+}
+
 function groupBlocksIntoChapters(blocks: RichBlock[], fallbackTitle: string): EpubChapter[] {
   const chapters: EpubChapter[] = [];
   let current: EpubChapter | null = null;
@@ -1183,14 +1246,16 @@ function groupBlocksIntoChapters(blocks: RichBlock[], fallbackTitle: string): Ep
       continue;
     }
     if (!current) {
-      current = { title: fallbackTitle, blocks: [] };
+      // Text before any heading: front matter. It gets a name for the nav but
+      // no heading of its own, or the book opens by repeating its own title.
+      current = { title: fallbackTitle, blocks: [], synthetic: true };
       chapters.push(current);
     }
     current.blocks.push(block);
   }
 
   const withContent = chapters.filter((chapter) => chapter.blocks.length > 0);
-  return withContent.length > 0 ? withContent : [{ title: fallbackTitle, blocks }];
+  return withContent.length > 0 ? withContent : [{ title: fallbackTitle, blocks, synthetic: true }];
 }
 
 function runsToXhtml(runs: RichRun[]): string {
@@ -1240,7 +1305,7 @@ export function blocksToEpub(
   const author = options.author?.trim() || 'BookForge';
   const language = options.language?.trim() || 'en';
 
-  const chapters = groupBlocksIntoChapters(blocks, title);
+  const chapters = groupBlocksIntoChapters(stripRedundantFrontMatter(blocks, title, author), title);
   const bookId = options.isbn?.trim() ? `urn:isbn:${options.isbn.trim()}` : `urn:uuid:${crypto.randomUUID()}`;
   const modified = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
@@ -1357,7 +1422,7 @@ export function blocksToEpub(
     <link rel="stylesheet" type="text/css" href="stylesheet.css"/>
   </head>
   <body>
-    <h1>${escapeXml(chapter.title)}</h1>
+    ${chapter.synthetic ? '' : `<h1>${escapeXml(chapter.title)}</h1>`}
 ${lines.join('\n')}
   </body>
 </html>`;
