@@ -171,6 +171,14 @@ boundaries only when a paragraph is itself too long — no request is ever cut
 mid-thought. Audiobook chapters get their title read first (optional), 0.4 s
 between passages, and a 0.8 s beat at the end so chapters do not run together.
 
+**The model runs in a Web Worker.** ONNX Runtime's WASM backend executes
+inference synchronously on the thread that calls it, so running it on the page
+froze the whole tab for the length of every passage — no repainting, no
+progress, and a Stop button that could not be clicked. A book is thousands of
+passages, which makes that unusable rather than merely rough. The worker keeps
+the model loaded between passages and hands back the audio buffer without
+copying it.
+
 **Assembly happens in the browser.** The model returns raw 16-bit PCM per
 passage; the client concatenates it, writes a canonical 44-byte WAV header, and
 encodes MP3 on demand with lamejs (loaded lazily — most sessions never ask for

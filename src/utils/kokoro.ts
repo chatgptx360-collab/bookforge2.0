@@ -11,93 +11,79 @@
  * no style direction — Kokoro takes a voice and a speed, nothing more.
  */
 
-const MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
-
 /** Kokoro emits 24kHz mono, which is exactly what the rest of the pipeline expects. */
 export const KOKORO_SAMPLE_RATE = 24000;
 
-interface RawAudio {
-  audio: Float32Array;
-  sampling_rate: number;
-}
+import type { WorkerRequest, WorkerResponse } from './kokoro.worker';
 
-interface KokoroModel {
-  generate(text: string, options: { voice: string; speed?: number }): Promise<RawAudio>;
-  stream(
-    text: string,
-    options: { voice: string; speed?: number },
-  ): AsyncGenerator<{ text: string; audio: RawAudio }, void, void>;
-}
+/** Omit across a union member by member, or only the shared keys survive. */
+type Unsent<T> = T extends { id: number } ? Omit<T, 'id'> : never;
 
-let loading: Promise<KokoroModel> | null = null;
+let worker: Worker | null = null;
+let nextId = 1;
 let loadedDevice: 'webgpu' | 'wasm' | null = null;
 
 export function kokoroDevice(): 'webgpu' | 'wasm' | null {
   return loadedDevice;
 }
 
-async function hasWebGpu(): Promise<boolean> {
-  const gpu = (navigator as { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
-  if (!gpu) return false;
-  try {
-    return Boolean(await gpu.requestAdapter());
-  } catch {
-    return false;
-  }
+/** True once the model is in memory, so callers can skip the "downloading" copy. */
+export function kokoroReady(): boolean {
+  return loadedDevice !== null;
+}
+
+function ensureWorker(): Worker {
+  if (worker) return worker;
+  worker = new Worker(new URL('./kokoro.worker.ts', import.meta.url), { type: 'module' });
+  worker.onerror = () => {
+    // A dead worker takes the loaded model with it; start clean next time.
+    worker?.terminate();
+    worker = null;
+    loadedDevice = null;
+  };
+  return worker;
 }
 
 /**
- * Loads the model once and reuses it. WebGPU gets the full-precision weights
- * because it can afford them and sounds better for it; the WASM fallback gets
- * the quantised build, which is a quarter of the download and several times
- * faster on a CPU.
+ * One request, one reply. Messages carry an id because the worker keeps the
+ * model between calls and replies must be matched to the passage that asked.
  */
-export async function loadKokoro(onProgress?: (fraction: number, label: string) => void): Promise<KokoroModel> {
-  if (loading) return loading;
+function ask(
+  request: Unsent<WorkerRequest>,
+  onProgress?: (fraction: number, label: string) => void,
+): Promise<Extract<WorkerResponse, { type: 'audio' | 'ready' }>> {
+  const active = ensureWorker();
+  const id = nextId++;
 
-  loading = (async () => {
-    const { KokoroTTS } = await import('kokoro-js');
-    const webgpu = await hasWebGpu();
-    loadedDevice = webgpu ? 'webgpu' : 'wasm';
+  return new Promise((resolve, reject) => {
+    const handle = (event: MessageEvent<WorkerResponse>) => {
+      const message = event.data;
+      if (message.id !== id) return;
 
-    const model = await KokoroTTS.from_pretrained(MODEL_ID, {
-      dtype: webgpu ? 'fp32' : 'q8',
-      device: loadedDevice,
-      progress_callback: (event: { status?: string; progress?: number; file?: string }) => {
-        if (event.status === 'progress' && typeof event.progress === 'number') {
-          onProgress?.(event.progress / 100, event.file ?? 'model');
-        }
-      },
-    } as never);
+      if (message.type === 'progress') {
+        onProgress?.(message.fraction, message.file);
+        return;
+      }
+      active.removeEventListener('message', handle);
+      if (message.type === 'error') {
+        reject(new Error(message.message));
+        return;
+      }
+      if (message.type === 'ready') loadedDevice = message.device as 'webgpu' | 'wasm';
+      else loadedDevice ??= 'wasm';
+      resolve(message);
+    };
 
-    return model as unknown as KokoroModel;
-  })();
-
-  try {
-    return await loading;
-  } catch (error) {
-    // A failed load must not poison every later attempt.
-    loading = null;
-    loadedDevice = null;
-    throw error;
-  }
+    active.addEventListener('message', handle);
+    active.postMessage({ ...request, id } as WorkerRequest);
+  });
 }
 
-/** True once the model is in memory, so callers can skip the "downloading" copy. */
-export function kokoroReady(): boolean {
-  return loading !== null && loadedDevice !== null;
+/** Warms the model up so the first passage is not also the first download. */
+export async function loadKokoro(onProgress?: (fraction: number, label: string) => void): Promise<void> {
+  await ask({ type: 'load' }, onProgress);
 }
 
-function floatToPcm(samples: Float32Array): Int16Array {
-  const pcm = new Int16Array(samples.length);
-  for (let i = 0; i < samples.length; i++) {
-    // Clamp before scaling: the model can overshoot slightly and wrapping
-    // would turn a loud consonant into a click.
-    const clamped = Math.max(-1, Math.min(1, samples[i]));
-    pcm[i] = Math.round(clamped * (clamped < 0 ? 0x8000 : 0x7fff));
-  }
-  return pcm;
-}
 
 /**
  * The model truncates at 509 phoneme tokens, silently. Phonemes run close to
@@ -206,8 +192,6 @@ export async function speakWithKokoro(
   onProgress?: (fraction: number, label: string) => void,
   shouldContinue?: () => boolean,
 ): Promise<{ pcm: Int16Array; sampleRate: number }> {
-  const model = await loadKokoro(onProgress);
-
   const parts = splitForKokoro(text);
   if (parts.length === 0) throw new Error('There was nothing to speak in this passage.');
 
@@ -233,9 +217,10 @@ export async function speakWithKokoro(
     for (let attempt = 0; attempt < 2 && pcm === null; attempt++) {
       if (shouldContinue && !shouldContinue()) throw new Error('Stopped.');
       try {
-        const result = await model.generate(piece, { voice, speed });
-        const rate = result.sampling_rate || sampleRate;
-        const candidate = floatToPcm(result.audio);
+        const result = await ask({ type: 'speak', text: piece, voice, speed }, onProgress);
+        if (result.type !== 'audio') throw new Error('The speech worker sent an unexpected reply.');
+        const rate = result.sampleRate || sampleRate;
+        const candidate = result.pcm;
 
         // The failure that leaves no trace: audio returned for only part of the
         // passage, or none at all. Nothing throws, the clip is just short, and

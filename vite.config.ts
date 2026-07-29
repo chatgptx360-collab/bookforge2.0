@@ -18,6 +18,11 @@ export default defineConfig(() => ({
     emptyOutDir: true,
     sourcemap: false,
   },
+  // The speech worker imports Transformers.js, which is code-split; the default
+  // IIFE worker format cannot express that.
+  worker: {
+    format: 'es' as const,
+  },
   server: {
     hmr: process.env.DISABLE_HMR !== 'true',
     watch: process.env.DISABLE_HMR === 'true' ? null : {},
