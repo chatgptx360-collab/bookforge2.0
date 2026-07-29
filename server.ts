@@ -2399,6 +2399,12 @@ app.post('/api/book/export-docx', async (req, res) => {
 // ---------------------------------------------------------------------------
 
 export interface TtsVoice {
+  /** The prebuilt voice name the model expects — never shown as the label. */
+  id: string;
+  /**
+   * A human name matching how the voice reads, so the gender is obvious from
+   * the list without decoding Gemini's star names.
+   */
   name: string;
   character: string;
   /** A rough guide for pickers: warm narrators vs bright, energetic reads. */
@@ -2413,94 +2419,94 @@ export interface TtsVoice {
 
 /** The prebuilt voices the Gemini speech models expose. */
 export const TTS_VOICES: TtsVoice[] = [
-  { name: 'Achernar', character: 'Soft', timbre: 'warm', gender: 'female',
+  { id: 'Achernar', name: 'Ava', character: 'Soft', timbre: 'warm', gender: 'female',
     goodFor: 'Intimate first-person narration',
     bestFor: ['Audiobook narration', 'Memoir', 'Bedtime stories'] },
-  { name: 'Achird', character: 'Friendly', timbre: 'warm', gender: 'male',
+  { id: 'Achird', name: 'Adam', character: 'Friendly', timbre: 'warm', gender: 'male',
     goodFor: 'Memoir and warm non-fiction',
     bestFor: ['Audiobook narration', 'Podcast', 'Explainer video'] },
-  { name: 'Algenib', character: 'Gravelly', timbre: 'deep', gender: 'male',
+  { id: 'Algenib', name: 'Hank', character: 'Gravelly', timbre: 'deep', gender: 'male',
     goodFor: 'Noir, grit, hard-boiled voices',
     bestFor: ['Thriller narration', 'Character voice', 'Trailer'] },
-  { name: 'Algieba', character: 'Smooth', timbre: 'warm', gender: 'male',
+  { id: 'Algieba', name: 'Julian', character: 'Smooth', timbre: 'warm', gender: 'male',
     goodFor: 'Literary fiction, long listening',
     bestFor: ['Audiobook narration', 'Literary fiction', 'Long-form'] },
-  { name: 'Alnilam', character: 'Firm', timbre: 'clear', gender: 'male',
+  { id: 'Alnilam', name: 'Nathan', character: 'Firm', timbre: 'clear', gender: 'male',
     goodFor: 'Business and instructional books',
     bestFor: ['Business books', 'Course narration', 'Corporate video'] },
-  { name: 'Aoede', character: 'Breezy', timbre: 'bright', gender: 'female',
+  { id: 'Aoede', name: 'Chloe', character: 'Breezy', timbre: 'bright', gender: 'female',
     goodFor: 'Light comedy, YA',
     bestFor: ['YA fiction', 'Podcast', 'Social video'] },
-  { name: 'Autonoe', character: 'Bright', timbre: 'bright', gender: 'female',
+  { id: 'Autonoe', name: 'Naomi', character: 'Bright', timbre: 'bright', gender: 'female',
     goodFor: 'Upbeat non-fiction',
     bestFor: ['Non-fiction', 'Explainer video', 'Advertising'] },
-  { name: 'Callirrhoe', character: 'Easy-going', timbre: 'warm', gender: 'female',
+  { id: 'Callirrhoe', name: 'Nadia', character: 'Easy-going', timbre: 'warm', gender: 'female',
     goodFor: 'Conversational narration',
     bestFor: ['Podcast', 'Audiobook narration', 'Interview reads'] },
-  { name: 'Charon', character: 'Informative', timbre: 'clear', gender: 'male',
+  { id: 'Charon', name: 'David', character: 'Informative', timbre: 'clear', gender: 'male',
     goodFor: 'Documentary and reference',
     bestFor: ['Documentary', 'Reference books', 'News reads'] },
-  { name: 'Despina', character: 'Smooth', timbre: 'warm', gender: 'female',
+  { id: 'Despina', name: 'Sofia', character: 'Smooth', timbre: 'warm', gender: 'female',
     goodFor: 'Romance and drama',
     bestFor: ['Romance', 'Drama', 'Audiobook narration'] },
-  { name: 'Enceladus', character: 'Breathy', timbre: 'warm', gender: 'male',
+  { id: 'Enceladus', name: 'Elliot', character: 'Breathy', timbre: 'warm', gender: 'male',
     goodFor: 'Quiet, interior passages',
     bestFor: ['Literary fiction', 'Meditation', 'Poetry'] },
-  { name: 'Erinome', character: 'Clear', timbre: 'clear', gender: 'female',
+  { id: 'Erinome', name: 'Elena', character: 'Clear', timbre: 'clear', gender: 'female',
     goodFor: 'Technical material',
     bestFor: ['Technical books', 'Documentation', 'E-learning'] },
-  { name: 'Fenrir', character: 'Excitable', timbre: 'bright', gender: 'male',
+  { id: 'Fenrir', name: 'Max', character: 'Excitable', timbre: 'bright', gender: 'male',
     goodFor: 'Adventure, high energy',
     bestFor: ['Adventure fiction', 'Trailer', 'Gaming'] },
-  { name: 'Gacrux', character: 'Mature', timbre: 'deep', gender: 'female',
+  { id: 'Gacrux', name: 'Margaret', character: 'Mature', timbre: 'deep', gender: 'female',
     goodFor: 'Historical and literary fiction',
     bestFor: ['Historical fiction', 'Literary fiction', 'Documentary'] },
-  { name: 'Iapetus', character: 'Clear', timbre: 'clear', gender: 'male',
+  { id: 'Iapetus', name: 'Ethan', character: 'Clear', timbre: 'clear', gender: 'male',
     goodFor: 'General narration',
     bestFor: ['Audiobook narration', 'Non-fiction', 'E-learning'] },
-  { name: 'Kore', character: 'Firm', timbre: 'clear', gender: 'female',
+  { id: 'Kore', name: 'Diana', character: 'Firm', timbre: 'clear', gender: 'female',
     goodFor: 'Confident, steady narration',
     bestFor: ['Non-fiction', 'Business books', 'Presentation'] },
-  { name: 'Laomedeia', character: 'Upbeat', timbre: 'bright', gender: 'female',
+  { id: 'Laomedeia', name: 'Isla', character: 'Upbeat', timbre: 'bright', gender: 'female',
     goodFor: 'Self-help and motivation',
     bestFor: ['Self-help', 'Motivation', 'Advertising'] },
-  { name: 'Leda', character: 'Youthful', timbre: 'bright', gender: 'female',
+  { id: 'Leda', name: 'Lily', character: 'Youthful', timbre: 'bright', gender: 'female',
     goodFor: 'Young adult narrators',
     bestFor: ['YA fiction', "Children's books", 'Social video'] },
-  { name: 'Orus', character: 'Firm', timbre: 'deep', gender: 'male',
+  { id: 'Orus', name: 'Marcus', character: 'Firm', timbre: 'deep', gender: 'male',
     goodFor: 'Thrillers and authority',
     bestFor: ['Thriller narration', 'Documentary', 'Trailer'] },
-  { name: 'Puck', character: 'Upbeat', timbre: 'bright', gender: 'male',
+  { id: 'Puck', name: 'Charlie', character: 'Upbeat', timbre: 'bright', gender: 'male',
     goodFor: 'Humour and banter',
     bestFor: ['Comedy', 'Podcast', 'Character voice'] },
-  { name: 'Pulcherrima', character: 'Forward', timbre: 'bright', gender: 'female',
+  { id: 'Pulcherrima', name: 'Vivian', character: 'Forward', timbre: 'bright', gender: 'female',
     goodFor: 'Persuasive non-fiction',
     bestFor: ['Advertising', 'Self-help', 'Presentation'] },
-  { name: 'Rasalgethi', character: 'Informative', timbre: 'clear', gender: 'male',
+  { id: 'Rasalgethi', name: 'Simon', character: 'Informative', timbre: 'clear', gender: 'male',
     goodFor: 'Essays and journalism',
     bestFor: ['Journalism', 'Essays', 'Podcast'] },
-  { name: 'Sadachbia', character: 'Lively', timbre: 'bright', gender: 'male',
+  { id: 'Sadachbia', name: 'Theo', character: 'Lively', timbre: 'bright', gender: 'male',
     goodFor: 'Children and family books',
     bestFor: ["Children's books", 'Family audio', 'Character voice'] },
-  { name: 'Sadaltager', character: 'Knowledgeable', timbre: 'clear', gender: 'male',
+  { id: 'Sadaltager', name: 'Arthur', character: 'Knowledgeable', timbre: 'clear', gender: 'male',
     goodFor: 'Academic and explanatory',
     bestFor: ['Academic texts', 'E-learning', 'Documentary'] },
-  { name: 'Schedar', character: 'Even', timbre: 'clear', gender: 'male',
+  { id: 'Schedar', name: 'Daniel', character: 'Even', timbre: 'clear', gender: 'male',
     goodFor: 'Long-form, low fatigue',
     bestFor: ['Long audiobooks', 'Reference books', 'E-learning'] },
-  { name: 'Sulafat', character: 'Warm', timbre: 'warm', gender: 'female',
+  { id: 'Sulafat', name: 'Clara', character: 'Warm', timbre: 'warm', gender: 'female',
     goodFor: 'Classic audiobook narration',
     bestFor: ['Audiobook narration', 'Literary fiction', 'Memoir'] },
-  { name: 'Umbriel', character: 'Easy-going', timbre: 'warm', gender: 'male',
+  { id: 'Umbriel', name: 'Owen', character: 'Easy-going', timbre: 'warm', gender: 'male',
     goodFor: 'Relaxed storytelling',
     bestFor: ['Audiobook narration', 'Podcast', 'Bedtime stories'] },
-  { name: 'Vindemiatrix', character: 'Gentle', timbre: 'warm', gender: 'female',
+  { id: 'Vindemiatrix', name: 'Rose', character: 'Gentle', timbre: 'warm', gender: 'female',
     goodFor: 'Poetry and reflection',
     bestFor: ['Poetry', 'Meditation', 'Literary fiction'] },
-  { name: 'Zephyr', character: 'Bright', timbre: 'bright', gender: 'female',
+  { id: 'Zephyr', name: 'Zoe', character: 'Bright', timbre: 'bright', gender: 'female',
     goodFor: 'Energetic openings',
     bestFor: ['Advertising', 'Trailer', 'Social video'] },
-  { name: 'Zubenelgenubi', character: 'Casual', timbre: 'clear', gender: 'male',
+  { id: 'Zubenelgenubi', name: 'Jesse', character: 'Casual', timbre: 'clear', gender: 'male',
     goodFor: 'Podcast-style delivery',
     bestFor: ['Podcast', 'Interview reads', 'Explainer video'] },
 ];
@@ -2605,11 +2611,14 @@ export function describeQuota(raw: string): QuotaDetails {
   const plan = freeTier ? 'free tier' : 'plan';
   const allowance = limit === null ? 'The speech quota' : `The ${plan} allows ${limit} speech requests per ${scope}`;
 
+  // State the fact only. What happens next is the caller's decision — a book
+  // run waits the window out, a single preview does not — so promising a retry
+  // here would be wrong half the time.
   const message =
     scope === 'day'
       ? `${allowance} for ${model}, and that is spent for today. Google's daily quotas reset at midnight Pacific time. ` +
-        'Enabling billing on the API key raises the limit immediately — everything narrated so far is kept either way.'
-      : `${allowance} for ${model}, and that window is full. Waiting ${retryAfterSeconds}s, then continuing.`;
+        'Enabling billing on the API key raises the limit immediately.'
+      : `${allowance} for ${model}, and that window is full. It frees up in about ${retryAfterSeconds}s.`;
 
   return { message, retryAfterSeconds, scope, limit };
 }
@@ -2712,7 +2721,8 @@ app.post('/api/tts/speak', async (req, res) => {
       });
       return;
     }
-    if (!TTS_VOICES.some((entry) => entry.name === voice)) {
+    // Requests carry the model's voice id, not the display name.
+    if (!TTS_VOICES.some((entry) => entry.id === voice)) {
       res.status(400).json({ error: `Unknown voice "${voice}".` });
       return;
     }

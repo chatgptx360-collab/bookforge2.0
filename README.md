@@ -100,7 +100,7 @@ Mounted at `/api`, all `POST` unless noted.
 | `/api/book/lookup` | `{ text, context?, targetLanguage? }` | `{ explanation }` for the reader's lookup |
 | `GET /api/tts/voices` | — | `{ voices[], model, available, format }` |
 | `/api/tts/plan` | `{ text, maxChars? }` | `{ chunks[], characters, estimatedSeconds }` |
-| `/api/tts/speak` | `{ text, voice?, style? }` | `{ audioBase64, mimeType, sampleRate }` — raw 16-bit PCM; 429 with `retryAfterSeconds` when throttled |
+| `/api/tts/speak` | `{ text, voice?, style? }` — `voice` is the model id | `{ audioBase64, mimeType, sampleRate }` — raw 16-bit PCM; 429 with `retryAfterSeconds` and `quotaScope` when throttled |
 
 Uploads are capped at 25 MB; oversized files get a 413 with a readable message.
 `/api/tts/speak` rejects passages over 4,500 characters with a 413 telling you to
@@ -138,6 +138,12 @@ narration, podcast, documentary, trailer, children's books and so on. Each row
 carries a ♂/♀ icon beside its play button, and the list filters by gender or
 timbre. Every voice previews on a fixed line, so you hear a narrator before
 committing a book to them.
+
+Voices are listed under human names — Clara, Marcus, Ava, Theo — so the gender
+is obvious from the name without decoding Google's star catalogue. The model's
+own id (`Sulafat`, `Orus`, `Achernar`) stays visible on each row and is what
+every request carries; `voice` in a request body is always the id, and a display
+name is rejected with a 400.
 
 **Delivery is directed, not dialled.** These models take direction in prose, so
 the style box is passed as an instruction ahead of the passage — "read this

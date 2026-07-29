@@ -393,8 +393,13 @@ test('the voice catalogue is well formed', () => {
   assert.ok(TTS_VOICES.length >= 20, 'a real catalogue of narrators is offered');
 
   const names = new Set();
+  const ids = new Set();
   for (const voice of TTS_VOICES) {
+    // The id is what the model is asked for; the name is what a person reads.
+    assert.ok(voice.id && !ids.has(voice.id), `duplicate or missing id: ${voice.id}`);
+    ids.add(voice.id);
     assert.ok(voice.name && !names.has(voice.name), `duplicate or missing name: ${voice.name}`);
+    assert.notEqual(voice.name, voice.id, `${voice.id} still shows its raw id as a name`);
     names.add(voice.name);
     assert.ok(voice.character && voice.goodFor, `${voice.name} is missing its description`);
     assert.ok(
@@ -408,12 +413,30 @@ test('the voice catalogue is well formed', () => {
       `${voice.name} needs at least two concrete uses`,
     );
   }
-  // The default the UI ships with must exist in the catalogue.
-  assert.ok(names.has('Sulafat'));
+  // The default the UI ships with must exist in the catalogue, by id.
+  assert.ok(ids.has('Sulafat'));
   // Both genders must be usefully represented, or the filter is pointless.
   for (const gender of ['male', 'female']) {
     const count = TTS_VOICES.filter((voice) => voice.gender === gender).length;
     assert.ok(count >= 8, `only ${count} ${gender} voices`);
+  }
+
+  // The whole point of the display names is that the gender reads off the name,
+  // so the two must never drift apart.
+  const FEMALE_NAMES = new Set([
+    'Ava', 'Chloe', 'Naomi', 'Nadia', 'Sofia', 'Elena', 'Margaret',
+    'Diana', 'Isla', 'Lily', 'Vivian', 'Clara', 'Rose', 'Zoe',
+  ]);
+  const MALE_NAMES = new Set([
+    'Adam', 'Hank', 'Julian', 'Nathan', 'David', 'Elliot', 'Max', 'Ethan',
+    'Marcus', 'Charlie', 'Simon', 'Theo', 'Arthur', 'Daniel', 'Owen', 'Jesse',
+  ]);
+  for (const voice of TTS_VOICES) {
+    const expected = voice.gender === 'female' ? FEMALE_NAMES : MALE_NAMES;
+    assert.ok(
+      expected.has(voice.name),
+      `${voice.name} (${voice.id}) is marked ${voice.gender} but is not in that name list`,
+    );
   }
 });
 

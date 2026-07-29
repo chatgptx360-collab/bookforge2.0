@@ -4,6 +4,9 @@ import { base64ToPcm, encodeWav } from '../../utils/audio';
 import { readJson, speak } from '../../utils/speech';
 
 export interface TtsVoice {
+  /** The model's own voice name, sent with every request. */
+  id: string;
+  /** The human name shown in the list — chosen to match the voice's gender. */
   name: string;
   character: string;
   timbre: 'warm' | 'bright' | 'deep' | 'clear';
@@ -79,6 +82,11 @@ export function useVoiceCatalogue() {
   return catalogue;
 }
 
+/** Headings show the human name; state and requests carry the id. */
+export function voiceLabel(catalogue: VoiceCatalogue | null, id: string): string {
+  return catalogue?.voices.find((voice) => voice.id === id)?.name ?? id;
+}
+
 const PREVIEW_LINE =
   'She climbed the last of the stair, and the lamp turned once, as if it had been waiting for her all these years.';
 
@@ -144,22 +152,22 @@ export default function VoicePicker({
 
       <div className="max-h-[26rem] overflow-y-auto pr-1 space-y-1.5">
         {shown.map((voice) => {
-          const selected = voice.name === value;
+          const selected = voice.id === value;
           const { Icon: GenderIcon, tone, label } = GENDER[voice.gender];
           return (
             <div
-              key={voice.name}
+              key={voice.id}
               className={`flex items-center gap-2 p-2.5 rounded-xl border transition ${
                 selected ? 'border-[#D4AF37] bg-[#D4AF37]/10' : 'border-[#27272A] bg-[#111114] hover:border-[#3F3F46]'
               }`}
             >
               <button
                 type="button"
-                onClick={() => onChange(voice.name)}
+                onClick={() => onChange(voice.id)}
                 disabled={disabled}
                 className="flex-1 text-left min-w-0 cursor-pointer disabled:cursor-not-allowed"
               >
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className={`text-xs font-semibold ${selected ? 'text-[#D4AF37]' : 'text-white'}`}>
                     {voice.name}
                   </span>
@@ -168,6 +176,8 @@ export default function VoicePicker({
                   >
                     {voice.character}
                   </span>
+                  {/* Kept visible so a voice can still be matched to Google's docs. */}
+                  <span className="text-[9px] font-mono text-[#3F3F46]">{voice.id}</span>
                 </div>
                 <p className="text-[10px] text-[#71717A] mt-0.5 truncate">{voice.goodFor}</p>
                 <div className="flex gap-1 flex-wrap mt-1.5">
@@ -188,13 +198,13 @@ export default function VoicePicker({
                 </span>
                 <button
                   type="button"
-                  onClick={() => preview(voice.name)}
+                  onClick={() => preview(voice.id)}
                   disabled={previewing !== null}
                   title={`Hear ${voice.name}`}
                   aria-label={`Hear ${voice.name}`}
                   className="p-2 rounded-lg text-[#D4AF37] hover:bg-[#D4AF37]/10 cursor-pointer disabled:opacity-40"
                 >
-                  {previewing === voice.name ? (
+                  {previewing === voice.id ? (
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   ) : (
                     <Play className="w-3.5 h-3.5" />

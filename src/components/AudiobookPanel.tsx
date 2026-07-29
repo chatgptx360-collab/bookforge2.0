@@ -10,7 +10,7 @@ import {
   RefreshCw,
   Upload,
 } from 'lucide-react';
-import VoicePicker, { useVoiceCatalogue } from './tts/VoicePicker';
+import VoicePicker, { useVoiceCatalogue, voiceLabel } from './tts/VoicePicker';
 import {
   base64ToPcm,
   concatPcm,
@@ -427,7 +427,7 @@ export default function AudiobookPanel() {
 
             <div>
               <h3 className="text-[10px] uppercase font-mono font-bold text-[#71717A] tracking-wider mb-2">
-                Narrator — {voice}
+                Narrator — {voiceLabel(catalogue, voice)}
               </h3>
               {catalogue && (
                 <VoicePicker voices={catalogue.voices} value={voice} onChange={setVoice} disabled={running} />

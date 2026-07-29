@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, AudioLines, Check, Download, Loader2, Sparkles, Square } from 'lucide-react';
-import VoicePicker, { useVoiceCatalogue } from './tts/VoicePicker';
+import VoicePicker, { useVoiceCatalogue, voiceLabel } from './tts/VoicePicker';
 import { planChunks, speak } from '../utils/speech';
 import { loadSession, savedAgo, saveSession } from '../utils/sessionStore';
 import {
@@ -290,7 +290,7 @@ export default function TtsStudioPanel() {
 
         <div className="xl:col-span-2">
           <h3 className="text-[10px] uppercase font-mono font-bold text-[#71717A] tracking-wider mb-2">
-            Voice — {voice}
+            Voice — {voiceLabel(catalogue, voice)}
           </h3>
           {catalogue ? (
             <VoicePicker voices={catalogue.voices} value={voice} onChange={setVoice} disabled={Boolean(busy)} />
