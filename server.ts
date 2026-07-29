@@ -31,6 +31,18 @@ const PORT = Number(process.env.PORT ?? 3000);
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 export const app = express();
+// Cross-origin isolation, which is what unlocks SharedArrayBuffer and lets the
+// speech model run on more than one CPU thread. On a machine without a usable
+// GPU that is the difference between a book taking a night and taking an hour.
+// "credentialless" rather than "require-corp": the model comes from the Hugging
+// Face CDN, which sends no CORP header, and credentialless drops credentials
+// from that request instead of requiring one.
+app.use((_req, res, next) => {
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+  next();
+});
+
 app.use(express.json({ limit: '50mb' }));
 
 const upload = multer({

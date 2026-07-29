@@ -22,6 +22,12 @@ type Unsent<T> = T extends { id: number } ? Omit<T, 'id'> : never;
 let worker: Worker | null = null;
 let nextId = 1;
 let loadedDevice: 'webgpu' | 'wasm' | null = null;
+let loadedThreads = 1;
+
+/** How many CPU threads the runtime actually got — 1 without isolation. */
+export function kokoroThreads(): number {
+  return loadedThreads;
+}
 
 export function kokoroDevice(): 'webgpu' | 'wasm' | null {
   return loadedDevice;
@@ -69,7 +75,10 @@ function ask(
         reject(new Error(message.message));
         return;
       }
-      if (message.type === 'ready') loadedDevice = message.device as 'webgpu' | 'wasm';
+      if (message.type === 'ready') {
+        loadedDevice = message.device as 'webgpu' | 'wasm';
+        loadedThreads = message.threads;
+      }
       else loadedDevice ??= 'wasm';
       resolve(message);
     };

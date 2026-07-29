@@ -178,14 +178,22 @@ export default function AudiobookPanel() {
       : catalogue;
 
   // Said plainly, because it decides whether a book takes an hour or a night.
+  // Threads are what decides CPU speed, so report the real number rather than
+  // a vague promise. One thread means the page is not cross-origin isolated.
+  const cores = typeof navigator === 'undefined' ? 0 : navigator.hardwareConcurrency || 0;
+  const isolated = typeof window !== 'undefined' && window.crossOriginIsolated;
+  const threadNote = isolated
+    ? ` using ${Math.max(1, Math.min(cores - 1, 8))} of your ${cores} CPU cores`
+    : ' on a single CPU core';
+
   const gpuNote =
     gpu === null
       ? ''
       : gpu.usable
         ? ' Your graphics card is available, so narration runs fast.'
         : gpu.reason === 'software'
-          ? ' Your browser reports WebGPU as software only, so this runs on the CPU — several times slower. Turning on graphics acceleration in your browser, or updating your graphics driver, would fix it.'
-          : ' No graphics acceleration here, so this runs on the CPU — several times slower, but it still works.';
+          ? ` Your browser reports WebGPU as software only, so this runs${threadNote}. Turning on graphics acceleration, or updating your graphics driver, would fix it.`
+          : ` No graphics acceleration here, so this runs${threadNote}.`;
 
   const handleFile = async (file: File) => {
     const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();

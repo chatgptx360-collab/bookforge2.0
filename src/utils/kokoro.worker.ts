@@ -21,7 +21,7 @@ export type WorkerRequest =
 
 export type WorkerResponse =
   | { id: number; type: 'progress'; fraction: number; file: string }
-  | { id: number; type: 'ready'; device: string }
+  | { id: number; type: 'ready'; device: string; threads: number; isolated: boolean }
   | { id: number; type: 'audio'; pcm: Int16Array; sampleRate: number }
   | { id: number; type: 'error'; message: string };
 
@@ -38,6 +38,7 @@ interface KokoroModel {
 let model: KokoroModel | null = null;
 let loading: Promise<KokoroModel> | null = null;
 let device: 'webgpu' | 'wasm' = 'wasm';
+let threads = 1;
 
 
 function load(id: number): Promise<KokoroModel> {
@@ -45,6 +46,16 @@ function load(id: number): Promise<KokoroModel> {
 
   loading = (async () => {
     const { KokoroTTS } = await import('kokoro-js');
+    const { env } = await import('@huggingface/transformers');
+
+    // Without cross-origin isolation there is no SharedArrayBuffer and the
+    // runtime is stuck on one thread. With it, inference scales across cores,
+    // which is the only speed available on a machine with no usable GPU.
+    // One core is left for the page so the UI stays smooth.
+    const cores = (self.navigator as Navigator).hardwareConcurrency || 4;
+    threads = self.crossOriginIsolated ? Math.max(1, Math.min(cores - 1, 8)) : 1;
+    if (env.backends?.onnx?.wasm) env.backends.onnx.wasm.numThreads = threads;
+    else threads = 1;
     // Only a hardware adapter earns the WebGPU path. A software one would
     // pull four times the weights and then run them slower than WASM does.
     device = (await inspectGpu(self)).usable ? 'webgpu' : 'wasm';
@@ -93,7 +104,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   try {
     const ready = model ?? (await load(request.id));
     if (request.type === 'load') {
-      post({ id: request.id, type: 'ready', device });
+      post({ id: request.id, type: 'ready', device, threads, isolated: self.crossOriginIsolated });
       return;
     }
 

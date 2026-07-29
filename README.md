@@ -197,6 +197,16 @@ boundaries only when a paragraph is itself too long — no request is ever cut
 mid-thought. Audiobook chapters get their title read first (optional), 0.4 s
 between passages, and a 0.8 s beat at the end so chapters do not run together.
 
+**Multi-threaded on the CPU.** ONNX Runtime can only use more than one thread
+when `SharedArrayBuffer` is available, which requires the page to be
+cross-origin isolated. The app therefore sends `Cross-Origin-Opener-Policy:
+same-origin` and `Cross-Origin-Embedder-Policy: credentialless`, and the worker
+gives the runtime every core but one. On a machine with no usable GPU that is
+the only speed available, and it is worth several times. `credentialless`
+rather than `require-corp` because the model comes from the Hugging Face CDN,
+which sends no CORP header. The panel reports the real thread count, so a
+single thread is visible rather than silently assumed.
+
 **The model runs in a Web Worker.** ONNX Runtime's WASM backend executes
 inference synchronously on the thread that calls it, so running it on the page
 froze the whole tab for the length of every passage — no repainting, no
