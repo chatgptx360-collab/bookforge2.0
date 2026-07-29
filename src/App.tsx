@@ -3,13 +3,15 @@ import { BookOpen, Menu } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import ConverterPanel from './components/ConverterPanel';
 import ReaderEditorPanel from './components/ReaderEditorPanel';
+import StudioPanel from './components/StudioPanel';
 
-export type ViewId = 'converter' | 'reader';
+export type ViewId = 'converter' | 'reader' | 'studio';
 
 const ROUTES: Record<string, ViewId> = {
   '/': 'converter',
   '/converter': 'converter',
   '/reader': 'reader',
+  '/studio': 'studio',
 };
 
 function viewFromPath(pathname: string): ViewId {
@@ -69,7 +71,7 @@ export default function App() {
           </div>
         </div>
 
-        {activeView === 'reader' ? <ReaderEditorPanel /> : <ConverterPanel />}
+        {activeView === 'reader' ? <ReaderEditorPanel /> : activeView === 'studio' ? <StudioPanel /> : <ConverterPanel />}
       </div>
     </div>
   );

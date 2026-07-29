@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import BookReader from './BookReader';
 import type { BookProject, DocumentChapter, ParsedDocument, ParsedSection } from '../types';
+import { clearWorkspace, describeAge, loadWorkspace, saveWorkspace } from '../utils/workspaceStore';
 
 const EDITOR_THEMES = [
   {
@@ -111,9 +112,50 @@ export default function ReaderEditorPanel() {
   const [isPreviewMode, setIsPreviewMode] = useState(false);
   const [readingFullscreen, setReadingFullscreen] = useState(false);
   const [sectionsOpen, setSectionsOpen] = useState(false);
+  const [restoredAt, setRestoredAt] = useState<number | null>(null);
+  const hydratedRef = useRef(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Restore the previous session before the first autosave can overwrite it.
+  useEffect(() => {
+    const saved = loadWorkspace();
+    hydratedRef.current = true;
+    if (!saved) return;
+    setDocTitle(saved.title);
+    setDocSubtitle(saved.subtitle);
+    setDocAuthor(saved.author);
+    setChapters(saved.chapters);
+    setSelectedChapterId(saved.selectedChapterId || saved.chapters[0].id);
+    setRestoredAt(saved.savedAt);
+  }, []);
+
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    const isUntouchedSample = chapters.length === 1 && chapters[0].id === SAMPLE_CHAPTER.id;
+    if (isUntouchedSample) return;
+    const timer = setTimeout(() => {
+      saveWorkspace({
+        title: docTitle,
+        subtitle: docSubtitle,
+        author: docAuthor,
+        chapters,
+        selectedChapterId,
+      });
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [chapters, docTitle, docSubtitle, docAuthor, selectedChapterId]);
+
+  const startFresh = () => {
+    clearWorkspace();
+    setChapters([SAMPLE_CHAPTER]);
+    setSelectedChapterId(SAMPLE_CHAPTER.id);
+    setDocTitle('My Uploaded Masterpiece');
+    setDocSubtitle('');
+    setDocAuthor('Unknown Author');
+    setRestoredAt(null);
+  };
 
   const activeTheme = EDITOR_THEMES.find((t) => t.id === activeThemeId) ?? EDITOR_THEMES[0];
   const activeChapter = chapters.find((c) => c.id === selectedChapterId) ?? chapters[0] ?? null;
@@ -481,6 +523,30 @@ export default function ReaderEditorPanel() {
           </button>
         </div>
       </header>
+
+      {restoredAt !== null && (
+        <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2 bg-[#D4AF37]/8 border-b border-[#D4AF37]/20">
+          <span className="text-[11px] text-[#D4AF37]/90">
+            Restored your last session from {describeAge(restoredAt)}.
+          </span>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={startFresh}
+              className="text-[10px] font-semibold uppercase tracking-wider text-zinc-300 hover:text-white cursor-pointer"
+            >
+              Start fresh
+            </button>
+            <button
+              type="button"
+              onClick={() => setRestoredAt(null)}
+              className="text-[10px] font-semibold uppercase tracking-wider text-[#71717A] hover:text-white cursor-pointer"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 flex overflow-hidden relative">
         {sectionsOpen && (
