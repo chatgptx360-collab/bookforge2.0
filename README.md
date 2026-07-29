@@ -62,9 +62,10 @@ different Node ABI — reinstall on Node 22 LTS.
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `GEMINI_API_KEY` | for AI routes | Translation, drafting, marketing copy, covers |
-| `OPENROUTER_API_KEY` | optional | Fallback for the text routes when Gemini is absent |
+| `OPENROUTER_API_KEY` | optional | Text-route fallback used when Gemini is absent, failing or out of quota |
 | `GEMINI_MODELS` | optional | Comma-separated rotation list for quota failures |
 | `GEMINI_IMAGE_MODEL` | optional | Defaults to `imagen-4.0-generate-001` |
+| `OPENROUTER_MODEL` | optional | Defaults to `google/gemini-2.5-flash` |
 | `AI_RATE_LIMIT` | optional | AI calls per IP per hour (default 40) |
 | `CONVERT_RATE_LIMIT` | optional | Conversions per IP per hour (default 120) |
 | `COVER_RATE_LIMIT` | optional | Cover generations per IP per hour (default 10) |
@@ -72,6 +73,14 @@ different Node ABI — reinstall on Node 22 LTS.
 
 Conversion, parsing and all DOCX/EPUB/PDF/RTF export routes need **no** API key.
 AI routes return HTTP 503 with a clear message when no provider is configured.
+
+**Provider selection.** Gemini is used when `GEMINI_API_KEY` is present. If a
+call fails or every model in the rotation is exhausted and `OPENROUTER_API_KEY`
+is also set, the request falls back to OpenRouter automatically. With only
+`OPENROUTER_API_KEY`, every text route uses OpenRouter directly — but cover
+generation and cover audit need Gemini, since they depend on its image and
+multimodal APIs. `GET /api/health` reports which provider is active and whether
+a fallback is armed.
 
 ## API
 

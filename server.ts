@@ -97,6 +97,15 @@ export async function generateContentWithRetry(
 ): Promise<{ text?: string }> {
   if (!geminiClient) return generateWithOpenRouter(params as { contents: string });
 
+  // With both providers configured, OpenRouter becomes the safety net for when
+  // Gemini is exhausted or down. Multimodal calls pass `contents` as an array
+  // and have no OpenRouter equivalent here, so they are excluded.
+  const canFallBack = typeof params.contents === 'string' && Boolean(process.env.OPENROUTER_API_KEY);
+  const fallBack = async (reason: string) => {
+    console.warn(`[Gemini] ${reason}; falling back to OpenRouter (${OPENROUTER_MODEL})`);
+    return generateWithOpenRouter(params as { contents: string; config?: { responseMimeType?: string } });
+  };
+
   let rotations = 0;
   let lastError: unknown;
 
@@ -130,9 +139,11 @@ export async function generateContentWithRetry(
         await sleep(Math.min(waitMs, 30_000));
         continue;
       }
+      if (canFallBack) return fallBack(`request failed (${errorMsg.slice(0, 120)})`);
       throw error;
     }
   }
+  if (canFallBack) return fallBack('all model rotations exhausted');
   throw lastError instanceof Error ? lastError : new Error('Gemini request failed after retries');
 }
 
@@ -2097,6 +2108,9 @@ app.get('/api/health', (_req, res) => {
     version: '2.0.0',
     node: process.version,
     ai: geminiClient ? 'gemini' : process.env.OPENROUTER_API_KEY ? 'openrouter' : 'disabled',
+    // Non-null when a second provider is configured to take over on failure.
+    fallback: geminiClient && process.env.OPENROUTER_API_KEY ? 'openrouter' : null,
+    imageGeneration: geminiClient ? 'available' : 'requires GEMINI_API_KEY',
   });
 });
 
