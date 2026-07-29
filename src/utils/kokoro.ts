@@ -106,9 +106,27 @@ function floatToPcm(samples: Float32Array): Int16Array {
  */
 const MAX_PIECE_CHARS = 320;
 
-/** Sentence-ish split that keeps terminal punctuation and closing quotes. */
+/**
+ * Sentence-ish split that keeps terminal punctuation and closing quotes.
+ *
+ * The leading alternative has to allow an empty body, or a passage opening on
+ * an ellipsis — "…and then she ran" — loses those characters entirely, because
+ * a pattern requiring a non-terminator first can never match at position zero.
+ */
 function splitSentences(text: string): string[] {
-  return text.match(/[^.!?…]+(?:[.!?…]+["'”’»)\]]*|$)/g)?.map((s) => s.trim()).filter(Boolean) ?? [];
+  return text.match(/[^.!?…]*[.!?…]+["'”’»)\]]*|[^.!?…]+/g)?.map((s) => s.trim()).filter(Boolean) ?? [];
+}
+
+/**
+ * True when a piece has nothing a voice could actually say.
+ *
+ * Scene breaks (`***`, `❦`, `---`) and stray punctuation reach here as pieces
+ * of their own. Phonemising them yields nothing, and handing the model an
+ * empty utterance is how a chapter fails part-way through a book. They belong
+ * as a pause, which is what they mean on the page anyway.
+ */
+export function hasNoSpeech(piece: string): boolean {
+  return !/[\p{L}\p{N}]/u.test(piece);
 }
 
 /**
@@ -152,7 +170,11 @@ export function splitForKokoro(text: string, limit = MAX_PIECE_CHARS): string[] 
   }
   flush();
 
-  return pieces.length > 0 ? pieces : [text.trim()].filter(Boolean);
+  if (pieces.length > 0) return pieces;
+  // Fallback for text the sentence pass found nothing in: still never oversized.
+  const rest = text.trim();
+  if (!rest) return [];
+  return rest.length <= limit ? [rest] : (rest.match(new RegExp(`.{1,${limit}}`, 'gs')) ?? [rest]);
 }
 
 /**
@@ -178,14 +200,39 @@ export async function speakWithKokoro(
 
   const pieces: Int16Array[] = [];
   let sampleRate = KOKORO_SAMPLE_RATE;
-  let spoken = 0;
 
   for (let index = 0; index < parts.length; index++) {
     if (shouldContinue && !shouldContinue()) throw new Error('Stopped.');
-    const result = await model.generate(parts[index], { voice, speed });
+    const piece = parts[index];
+
+    // A scene break carries meaning but no words. Give it the beat it means
+    // rather than asking the model to pronounce three asterisks.
+    if (hasNoSpeech(piece)) {
+      pieces.push(new Int16Array(Math.round(0.45 * sampleRate)));
+      continue;
+    }
+
+    let result;
+    try {
+      result = await model.generate(piece, { voice, speed });
+    } catch (first) {
+      // One retry: a transient allocation failure inside the runtime should not
+      // cost a whole chapter.
+      if (shouldContinue && !shouldContinue()) throw new Error('Stopped.');
+      try {
+        result = await model.generate(piece, { voice, speed });
+      } catch {
+        const detail = first instanceof Error ? first.message : String(first);
+        // Name the passage that failed — "chapter 3 failed" is not enough to
+        // act on, and this is the text that has to be looked at.
+        throw new Error(
+          `Speech failed on passage ${index + 1} of ${parts.length} ("${piece.slice(0, 60)}…"): ${detail}`,
+        );
+      }
+    }
+
     pieces.push(floatToPcm(result.audio));
     sampleRate = result.sampling_rate || sampleRate;
-    spoken += parts[index].replace(/\s+/g, '').length;
     // A short pause between pieces, but never after the last one.
     if (index < parts.length - 1) pieces.push(new Int16Array(Math.round(0.08 * sampleRate)));
   }
@@ -194,10 +241,14 @@ export async function speakWithKokoro(
 
   // Second net: if splitting ever drops text, that is exactly the failure that
   // would not announce itself, so refuse to return a mutilated passage.
-  const asked = text.replace(/\s+/g, '').length;
-  if (asked > 0 && spoken / asked < 0.95) {
+  // Counted over speakable characters only, so a scene break turned into a
+  // pause does not read as loss.
+  const speakable = (value: string) => value.replace(/\s+/g, '').replace(/[^\p{L}\p{N}]/gu, '').length;
+  const asked = speakable(text);
+  const said = parts.filter((piece) => !hasNoSpeech(piece)).reduce((sum, piece) => sum + speakable(piece), 0);
+  if (asked > 0 && said / asked < 0.98) {
     throw new Error(
-      `Only ${Math.round((spoken / asked) * 100)}% of the passage was prepared for speech — the rest would have been lost silently.`,
+      `Only ${Math.round((said / asked) * 100)}% of the passage was prepared for speech — the rest would have been lost silently.`,
     );
   }
 

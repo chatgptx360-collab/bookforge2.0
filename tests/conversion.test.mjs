@@ -585,3 +585,35 @@ test('a restored voice is never handed to the wrong engine', async () => {
   assert.equal(voiceForEngine('kokoro', 'not_a_voice'), 'af_heart');
   assert.equal(voiceForEngine('gemini', undefined), 'Sulafat');
 });
+
+test('a scene break becomes a pause, not an utterance', async () => {
+  const { splitForKokoro, hasNoSpeech } = await import('../src/utils/kokoro.ts');
+
+  // These reach the model as pieces of their own and phonemise to nothing.
+  for (const marker of ['***', '❦', '---', '…', '* * *', '§']) {
+    assert.ok(hasNoSpeech(marker), `${marker} should be recognised as unspeakable`);
+  }
+  for (const words of ['The rain stopped.', 'Chapter 3', 'It was 1943.', '"No," he said.']) {
+    assert.ok(!hasNoSpeech(words), `${words} contains speech`);
+  }
+
+  // A break sitting between two full-length sentences ends up as a piece of
+  // its own — that is the case that used to be handed to the model.
+  const pieces = splitForKokoro('A'.repeat(318) + '.\n\n***\n\n' + 'B'.repeat(318) + '.');
+  assert.ok(pieces.some((piece) => hasNoSpeech(piece)), `no silent piece in: ${JSON.stringify(pieces.map((x) => x.slice(0, 12)))}`);
+  // A section that is nothing but a break is the same situation.
+  assert.ok(splitForKokoro('***').every((piece) => hasNoSpeech(piece)));
+});
+
+test('a passage opening on an ellipsis keeps it', async () => {
+  const { splitForKokoro } = await import('../src/utils/kokoro.ts');
+  // A pattern requiring a non-terminator first can never match at position 0,
+  // which silently dropped these characters.
+  const pieces = splitForKokoro('…and then she ran. It was late.');
+  assert.ok(pieces.join(' ').startsWith('…'), pieces.join(' | '));
+
+  const bare = (t) => t.replace(/\s+/g, '');
+  for (const source of ['…and then.', '?! Really.', '... wait.', '.'.repeat(10) + ' end.']) {
+    assert.equal(bare(splitForKokoro(source).join('')), bare(source), `text lost in: ${source}`);
+  }
+});
