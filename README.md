@@ -72,6 +72,7 @@ different Node ABI — reinstall on Node 22 LTS.
 | `AI_RATE_LIMIT` | optional | Text AI calls per IP per hour (default 40) |
 | `TTS_RATE_LIMIT` | optional | Speech calls per IP per hour (default 4000 — a book is thousands of passages) |
 | `CONVERT_RATE_LIMIT` | optional | Conversions per IP per hour (default 120) |
+| `MAX_UPLOAD_MB` | optional | Upload cap per file; defaults to 4 on Vercel, 25 locally |
 | `PORT` | optional | Defaults to `3000` |
 
 Conversion, parsing and all DOCX/EPUB/PDF/RTF export routes need **no** API key.
@@ -102,7 +103,13 @@ Mounted at `/api`, all `POST` unless noted.
 | `/api/tts/plan` | `{ text, maxChars? }` | `{ chunks[], characters, estimatedSeconds }` |
 | `/api/tts/speak` | `{ text, voice?, style? }` — `voice` is the model id | `{ audioBase64, mimeType, sampleRate }` — raw 16-bit PCM; 429 with `retryAfterSeconds` and `quotaScope` when throttled |
 
-Uploads are capped at 25 MB; oversized files get a 413 with a readable message.
+**Upload size is capped by the deployment, not by us.** Vercel rejects a
+serverless request body over about 4.5 MB at the edge, before any handler runs,
+so the server caps at 4 MB when `VERCEL` is set and 25 MB locally —
+`MAX_UPLOAD_MB` overrides either. `GET /api/health` reports the number in
+`maxUploadBytes`, and the converter checks each file against it before sending,
+so an oversized file fails immediately with its own size named instead of
+uploading for a minute and coming back with a bare 413.
 `/api/tts/speak` rejects passages over 4,500 characters with a 413 telling you to
 split them — `/api/tts/plan` does that for you.
 

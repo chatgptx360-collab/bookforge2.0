@@ -28,7 +28,17 @@ import { PDFParse } from 'pdf-parse';
 dotenv.config();
 
 const PORT = Number(process.env.PORT ?? 3000);
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+/**
+ * The upload ceiling, which is not ours to choose when deployed.
+ *
+ * Vercel rejects a serverless request body over about 4.5 MB at the edge,
+ * before any handler runs — so advertising 25 MB there produced a bare 413
+ * from the platform after a slow upload, with none of our own wording. The
+ * limit now matches whatever actually enforces it, and the client is told what
+ * it is so an oversized file fails instantly instead of being sent.
+ */
+const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || (process.env.VERCEL ? 4 : 25);
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 
 export const app = express();
 // Cross-origin isolation, which is what unlocks SharedArrayBuffer and lets the
@@ -2236,6 +2246,9 @@ app.get('/api/health', (_req, res) => {
     version: '2.0.0',
     node: process.version,
     ai: geminiClient ? 'gemini' : process.env.OPENROUTER_API_KEY ? 'openrouter' : 'disabled',
+    // The client checks against this before sending, so the number has to be
+    // the one that is actually enforced.
+    maxUploadBytes: MAX_UPLOAD_BYTES,
     // Non-null when a second provider is configured to take over on failure.
     fallback: geminiClient && process.env.OPENROUTER_API_KEY ? 'openrouter' : null,
     // Speech is Gemini-only; OpenRouter has no equivalent audio modality.
@@ -2880,7 +2893,7 @@ app.use('/api', (error: unknown, _req: Request, res: Response, next: NextFunctio
     res.status(status).json({
       error:
         error.code === 'LIMIT_FILE_SIZE'
-          ? `File is too large. The limit is ${Math.round(MAX_UPLOAD_BYTES / (1024 * 1024))} MB.`
+          ? `File is too large. The limit is ${MAX_UPLOAD_MB} MB per file.`
           : `Upload rejected: ${error.message}`,
     });
     return;

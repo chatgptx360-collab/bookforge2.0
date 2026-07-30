@@ -134,7 +134,10 @@ function convertFile(
         });
         return;
       }
-      let message = `Failed to convert ${file.name} (HTTP ${xhr.status})`;
+      let message =
+        xhr.status === 413
+          ? `${file.name} is too large for the server to accept. Split it, or remove embedded images.`
+          : `Failed to convert ${file.name} (HTTP ${xhr.status})`;
       try {
         const text = await (xhr.response as Blob).text();
         const parsed = JSON.parse(text);
@@ -153,6 +156,16 @@ function convertFile(
 
 export default function ConverterPanel() {
   const [files, setFiles] = useState<File[]>([]);
+  // Whatever is actually enforced — the deployment platform caps request
+  // bodies well below what the server would otherwise accept.
+  const [maxUploadBytes, setMaxUploadBytes] = useState<number | null>(null);
+
+  useEffect(() => {
+    fetch('/api/health')
+      .then((r) => r.json())
+      .then((info) => setMaxUploadBytes(Number(info.maxUploadBytes) || null))
+      .catch(() => setMaxUploadBytes(null));
+  }, []);
   const [targetFormat, setTargetFormat] = useState<TargetFormat>('docx');
   const [isDragOver, setIsDragOver] = useState(false);
   const [status, setStatus] = useState<'idle' | 'converting' | 'completed' | 'failed'>('idle');
@@ -266,6 +279,19 @@ export default function ConverterPanel() {
       const f = files[i];
       setCurrentConvertIdx(i);
       updateProgress(i, { status: 'converting', percent: 5 });
+
+      // Refuse an oversized file here rather than spending minutes uploading it
+      // only for the platform to reject the body at the edge.
+      if (maxUploadBytes && f.size > maxUploadBytes) {
+        const limit = (maxUploadBytes / (1024 * 1024)).toFixed(1);
+        const size = (f.size / (1024 * 1024)).toFixed(1);
+        updateProgress(i, {
+          status: 'error',
+          percent: 100,
+          error: `${size} MB is over the ${limit} MB upload limit, so this one was not sent. Split it, or remove embedded images.`,
+        });
+        continue;
+      }
 
       try {
         const { blob, epubValid, epubVersion } = await convertFile(
