@@ -41,6 +41,13 @@ npm run dev               # http://localhost:3000
 `npm run dev` runs `tsx server.ts`, which mounts Vite in middleware mode behind the
 same Express app that serves the API, so the client and API share one origin.
 
+**Running locally is not just for development.** The deployed app inherits
+Vercel's limits — request bodies capped near 4.5 MB and functions killed at 60
+seconds — and neither applies on your own machine. Locally the upload ceiling is
+25 MB (raise it with `MAX_UPLOAD_MB=200`), a long conversion cannot time out,
+and nothing is uploaded anywhere. For batches of large manuscripts that is the
+difference between working and not.
+
 ### Scripts
 
 | Script | What it does |
