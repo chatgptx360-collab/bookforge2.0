@@ -12,3 +12,6 @@ coverage
 
 # Server bundle (built, not published as a static asset)
 server-build
+
+# Generated snapshot of the tree; regenerate rather than commit drift.
+SOURCE.txt
