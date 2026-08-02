@@ -1,0 +1,277 @@
+BOOKFORGE — HANDOFF
+===================
+
+Written for whoever (or whatever) picks this up next. It covers what the app
+is, what is built, what is verified versus merely written, what is left, and
+the traps that cost time during the build.
+
+Repository : github.com/chatgptx360-collab/bookforge2.0
+Branch     : claude/bookforge-web-app-tf85x4   (this IS the default branch;
+             there is no main, so no PR was ever opened)
+Head       : e35342e  "Reject an oversized upload before sending it, not after"
+Commits    : 29
+Deployed   : https://bookforge2-0.vercel.app/
+
+
+-------------------------------------------------------------------------------
+1. WHAT THE APP IS
+-------------------------------------------------------------------------------
+
+A manuscript toolkit with five views, all client-routed from one Express app:
+
+  /converter   DOCX/PDF/EPUB/TXT/RTF conversion, multi-file, ZIP download
+  /reader      A real paginated e-reader plus a section editor
+  /audiobook   Manuscript -> chapter-by-chapter narration -> WAV/MP3
+  /speech      Paste text -> speech
+  /check       Finds what publishing platforms reject; fixes the mechanical ones
+
+The through-line: it must work with no API key. Conversion, the reader, the
+audit and the default speech engine all run without one. Only Gemini speech and
+the reader's dictionary lookup need a key.
+
+
+-------------------------------------------------------------------------------
+2. STACK AND LAYOUT
+-------------------------------------------------------------------------------
+
+React 19 + TypeScript (strict, noUnusedLocals) + Vite 6 + Tailwind v4
+Express 4, bundled by esbuild to server-build/server.cjs
+Deploys to Vercel as one serverless function at /api
+
+  server.ts                  2931 lines. Every API route + all conversion logic.
+  audit.ts                    375 lines. Manuscript quality checker (pure).
+  api/index.mjs              Vercel entry. Installs DOMMatrix/ImageData/Path2D
+                             shims BEFORE importing the bundle — pdf-lib and
+                             pdf-parse probe for them at import time.
+  src/App.tsx                History-API router, 5 views
+  src/components/            One panel per view
+  src/components/reader/     Pagination, panels, themes, narrator prosody
+  src/components/tts/        VoicePicker, shared by both speech views
+  src/utils/audio.ts         PCM helpers, WAV writer, lazy MP3, decodeWav
+  src/utils/speech.ts        Engine router: local Kokoro or hosted Gemini
+  src/utils/kokoro.ts        Main-thread wrapper around the worker
+  src/utils/kokoro.worker.ts Worker: model load + inference (keeps UI alive)
+  src/utils/kokoroVoices.ts  Voice catalogue, deliberately free of model code
+  src/utils/gpu.ts           Hardware-vs-software adapter detection
+  src/utils/sessionStore.ts  IndexedDB autosave for both speech views
+  src/utils/readerStore.ts   Per-book position, bookmarks, highlights
+  tests/conversion.test.mjs  41 tests, node --test, runs against the built CJS
+
+Scripts:
+  npm run dev     tsx server.ts  (Vite in middleware mode; use this)
+  npm run build   vite build + esbuild the server
+  npm start       serve the built client + API
+  npm test        build:server then node --test  (41 tests)
+  npm run lint    tsc --noEmit
+
+
+-------------------------------------------------------------------------------
+3. API
+-------------------------------------------------------------------------------
+
+  GET  /api/health              status, node, provider, maxUploadBytes
+  POST /api/book/parse-file     -> { title, author, sections[], wordCount }
+  POST /api/book/convert        -> converted file + X-Epub-Valid header
+  POST /api/book/validate-epub  -> { valid, epubVersion, errors[], warnings[] }
+  POST /api/book/export-custom-docx
+  POST /api/book/export-docx    KDP-layout DOCX
+  POST /api/book/lookup         reader dictionary (needs a key)
+  GET  /api/tts/voices          hosted voice catalogue
+  POST /api/tts/plan            split text into speakable chunks
+  POST /api/tts/speak           raw PCM; 429 carries quotaScope + retryAfterSeconds
+  POST /api/book/audit          quality findings
+  POST /api/book/fix            text with exact repetition removed
+
+
+-------------------------------------------------------------------------------
+4. WHAT IS BUILT
+-------------------------------------------------------------------------------
+
+CONVERSION
+  - EPUB output is EPUB 3.0 and passes EPUBCheck 5.2.1 with 0 errors,
+    0 warnings. No NCX, nav.xhtml with epub:type="toc", landmarks, stylesheet,
+    mimetype stored first and uncompressed. The archive is written by a
+    purpose-built ZIP writer (createZipArchive) because adm-zip cannot emit a
+    stored entry, which the spec requires for mimetype.
+  - Formatting survives: everything routes through a RichBlock/RichRun model,
+    so bold in a DOCX is bold in the EPUB, RTF and PDF.
+  - PDF input is reflowed (page markers stripped, hyphenation repaired,
+    wrapped lines rejoined into paragraphs).
+  - PDF output maps typographic characters to WinAnsi; non-Latin scripts are
+    NOT preserved in PDF (pdf-lib standard fonts only). Use DOCX or EPUB.
+  - Front matter is deduplicated. See section 6, item 1.
+
+READER
+  - CSS multi-column pagination inside a clipping box sized to exactly one
+    spread. Two pages wide, one on mobile, switchable to scrolling.
+  - Four themes, four typefaces, size/spacing/margin presets, drop caps.
+  - Contents with per-chapter time estimates, in-book search, bookmarks,
+    four-colour highlights with notes, progress and time-left.
+  - Read-aloud with sentence-level prosody planning (see reader/narrator.ts).
+  - State per book in localStorage, keyed by title+author, 25 books retained.
+
+SPEECH (two engines, switchable, choice persists in localStorage)
+  - Kokoro (default): 82M-param Apache-2.0 model, runs entirely in the browser
+    via transformers.js. No key, no quota, no request leaves the machine.
+    28 voices, graded A..F+ from the model card, ordered best-first.
+  - Gemini: hosted, accepts a delivery instruction, needs a key, metered.
+  - Kokoro cannot be directed, so the Delivery box is HIDDEN when it is
+    selected rather than left there ignoring input.
+  - Both resolve to raw PCM; the client stitches, writes WAV, encodes MP3
+    lazily with lamejs.
+
+AUDIOBOOK
+  - Section checkboxes; a typed table of contents starts unticked.
+    Everything/Chapters only/Nothing presets. Excluded sections are never sent.
+  - Per-section redo, and retry on a failed one. Replaces audio in place.
+  - Autosave to IndexedDB after every chapter. A refresh costs nothing;
+    "Continue narrating" resumes.
+  - Per-chapter WAV/MP3 download, or the whole book as a ZIP.
+
+MANUSCRIPT CHECK
+  - Rule-based, deterministic, no model. Same input always gives same output —
+    it runs on every conversion, so it must not drift.
+  - Splits findings into "fixable automatically" (exact duplicate paragraphs,
+    repeated headings, typed TOC) and "needs your judgment" (repeated dialogue,
+    formulaic openings, stock phrasing, thin chapters, narrow vocabulary).
+  - "Fix errors" only ever DELETES. A test asserts every surviving line came
+    from the original, in order. Prose is never rewritten.
+  - No score is shown, deliberately: it would measure different things from the
+    store's, and a green number followed by a rejection is worse than none.
+
+
+-------------------------------------------------------------------------------
+5. VERIFIED vs NOT VERIFIED  (read this before trusting anything)
+-------------------------------------------------------------------------------
+
+VERIFIED
+  - 41 unit tests pass (npm test). tsc --noEmit clean. Build clean.
+  - EPUB validity against real EPUBCheck 5.2.1.
+  - Every browser-testable behaviour was driven with Playwright at the time its
+    commit was made: conversion, reader, audiobook run/stop/redo/skip, autosave
+    across a hard refresh, quota handling, engine switching, the audit and its
+    fix, cross-origin isolation, upload rejection.
+
+NOT VERIFIED — IMPORTANT
+  - KOKORO HAS NEVER PRODUCED AUDIO IN A TEST. huggingface.co is unreachable
+    from the sandbox this was built in, so the model weights never downloaded.
+    Everything AROUND it is tested — worker messaging, splitting, the
+    completeness guard, WAV/MP3 encoding with synthetic PCM, error paths — but
+    the model itself has never run. FIRST TASK: run a chapter and confirm.
+  - No Gemini speech call has ever been made either. Same reason (no key in the
+    build environment). The 429 handling was tested against mocked responses.
+  - Long-run memory is untested. A 10-hour audiobook is roughly 1.7 GB of WAV
+    held in the browser plus a copy in IndexedDB. It may be fine; nobody knows.
+
+LOST
+  - The Playwright suites lived in a temp directory that was wiped when the
+    build container rolled back. They are gone. Each passed when its commit was
+    made and the code is byte-identical to that state, but they cannot be
+    re-run. Rebuilding them under tests/ is the single highest-value piece of
+    remaining work.
+
+
+-------------------------------------------------------------------------------
+6. WHAT IS LEFT
+-------------------------------------------------------------------------------
+
+HIGH VALUE
+  1. Rebuild the browser test suites under tests/ as real, committed files
+     (Playwright). Cover at minimum: a full audiobook run with a mocked
+     /api/tts/speak, autosave across a refresh, section skipping, redo, the
+     audit + fix round trip, and the upload-size rejection. Mocks MUST return
+     audio proportionate to the text — a fixed short tone now correctly trips
+     the completeness guard, which is exactly what it is for.
+  2. Confirm Kokoro actually speaks, then confirm a 20-chapter book completes.
+     Watch memory. If it fails, the fix is probably to drop each chapter's PCM
+     after writing its Blob, rather than holding everything.
+  3. Client-side conversion for DOCX. mammoth has a browser build. This would
+     remove the upload limit entirely, which is the single biggest practical
+     constraint on the deployed app (see item 7 below).
+
+WORTH DOING
+  4. A light theme for the app shell. The reader has four themes; everything
+     else is dark-only.
+  5. Create a main branch so work can go through pull requests. Right now the
+     feature branch IS the default branch.
+  6. One stitched audiobook file (single MP3 with chapter markers) alongside
+     the per-chapter ZIP.
+  7. Chapter-range narration by number, not just checkboxes, for very long books.
+
+KNOWN LIMITS, NOT BUGS
+  - Vercel rejects request bodies over ~4.5 MB at the edge. The server caps at
+    4 MB when VERCEL is set, 25 MB locally, MAX_UPLOAD_MB overrides either.
+    Running locally is the current answer for large files.
+  - Vercel functions are killed at 60s. Long conversions need localhost.
+  - Rate-limit state is per serverless instance, so limits are approximate.
+  - PDF output cannot represent non-Latin scripts.
+
+
+-------------------------------------------------------------------------------
+7. TRAPS — these cost real time, do not rediscover them
+-------------------------------------------------------------------------------
+
+  * Kokoro's generate() tokenises with truncation:true and the model caps input
+    at 509 tokens. Over-long input is cut off SILENTLY — no error, just short
+    audio and missing words. splitForKokoro() guarantees pieces <=320 chars and
+    must never be bypassed. There is a second guard comparing audio duration to
+    text length; both exist because this failure is invisible.
+
+  * A software WebGPU adapter (SwiftShader/lavapipe) satisfies requestAdapter()
+    exactly like real hardware. Accepting it is WORSE than having no GPU: it
+    pulls the fp32 weights, four times the download, then runs them on a CPU
+    rasterizer. src/utils/gpu.ts interrogates the adapter; do not simplify it
+    back to a truthiness check.
+
+  * Cross-origin isolation (COOP same-origin + COEP credentialless) is what
+    enables SharedArrayBuffer and therefore multi-threaded WASM inference. It
+    MUST be credentialless, not require-corp: the model comes from the Hugging
+    Face CDN, which sends no CORP header, and require-corp blocks it outright.
+    The app loads no other cross-origin resource, which is what makes site-wide
+    isolation safe. Do not add a CDN font or a remote image without rechecking.
+
+  * The dev server does NOT pick up server.ts or audit.ts changes. Restart
+    `tsx server.ts` after every server edit. This was rediscovered at least
+    four times; symptoms look exactly like a broken fix.
+
+  * Anything that reads a manuscript must not treat a contents entry as a
+    chapter heading. "Chapter 1: The Signal ..... 1" opens like a heading and
+    is not one. isTocEntry() guards this in audit.ts.
+
+  * Text extraction normalises single newlines to double, so a typed contents
+    list arrives as one paragraph per line, not one block. Handle both shapes.
+
+  * Stopping is not failing. The stop path throws Error('Stopped.') and callers
+    match that exact string to keep finished work and suppress the error
+    banner. Wrapping or rewording it silently turns "stopped" into "broken".
+
+  * IndexedDB transactions auto-close if you await inside them. Do the get and
+    the put in separate transactions.
+
+
+-------------------------------------------------------------------------------
+8. HOW TO CONTINUE
+-------------------------------------------------------------------------------
+
+  git clone -b claude/bookforge-web-app-tf85x4 \
+      https://github.com/chatgptx360-collab/bookforge2.0.git
+  cd bookforge2.0
+  npm install
+  npm run dev            # http://localhost:3000
+
+  Node 22 LTS or newer. No .env needed — Kokoro, conversion, the reader and the
+  audit all work with no key. Add GEMINI_API_KEY only for hosted speech and the
+  reader's lookup.
+
+  Before any commit:  npm run lint && npm test && npm run build
+
+  Conventions worth keeping:
+    - Comments explain WHY, not what. Several in this codebase record a
+      specific failure; deleting them loses the reason.
+    - Tests assert behaviour a user would notice, and their names read as
+      claims ("the book does not open by repeating itself").
+    - Never claim something works that has not been run. The Kokoro gap above
+      is documented precisely because it was never verified.
+
+  FIRST THING TO DO: narrate two or three chapters and confirm Kokoro produces
+  audio. Everything else in section 6 assumes it does, and nobody has seen it.
