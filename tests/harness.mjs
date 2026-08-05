@@ -120,11 +120,25 @@ export async function stubSpeech(page, { delayMs = 0, frequency = 440, onCall } 
   });
 }
 
+/**
+ * Noise from the dev server's hot-reload client, not from the app.
+ *
+ * Each suite starts and tears down its own dev server, so a page can still be
+ * completing an HMR handshake when the previous server goes away. The socket
+ * then throws, and asserting on raw page errors turned that into five failures
+ * that had nothing to do with the application — every suite passed alone and
+ * failed in a batch. Only Vite's transport is ignored; a genuine app error
+ * still fails the test.
+ */
+const DEV_SERVER_NOISE = /WebSocket closed without opened|\[vite\]|vite\/client/i;
+
 /** A page with the hosted engine selected and page errors surfaced as failures. */
 export async function openPage(context, { engine = 'gemini' } = {}) {
   const page = await context.newPage();
   const errors = [];
-  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('pageerror', (error) => {
+    if (!DEV_SERVER_NOISE.test(error.message)) errors.push(error.message);
+  });
   page.on('dialog', (dialog) => dialog.accept());
   await page.addInitScript((value) => {
     localStorage.setItem('bookforge.speech.engine', value);
