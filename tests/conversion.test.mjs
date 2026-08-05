@@ -848,3 +848,92 @@ test('fixing never invents or reorders text', async () => {
     cursor = at;
   }
 });
+
+// --- prose revision ---------------------------------------------------------
+//
+// This is the only operation that changes an author's words, so the guards
+// around it matter more than the feature. A bad rewrite that slips through
+// destroys a page of a book silently.
+
+test('revision targets only the paragraphs with something countable wrong', async () => {
+  const { planRevision } = await import('../audit.ts');
+  const text = [
+    'Chapter 1: The Signal',
+    '',
+    'The tide had gone out further than Marin remembered, exposing ribs of black rock.',
+    '',
+    '"Shut up, VERNA."',
+    '',
+    'She had rehearsed an answer for eleven years and still had none ready.',
+    '',
+    '"Shut up, VERNA."',
+    '',
+    'The weight of it washed over him in that moment, a testament to unwavering dread.',
+    '',
+    '"Shut up, VERNA."',
+  ].join('\n');
+
+  const targets = planRevision(text);
+  const picked = targets.map((t) => t.text);
+
+  // Repeated dialogue and stock phrasing are targets.
+  assert.ok(picked.some((p) => p.includes('Shut up, VERNA')), 'repeated dialogue was not targeted');
+  assert.ok(picked.some((p) => p.includes('washed over')), 'stock phrasing was not targeted');
+  // Clean prose and headings are not.
+  assert.ok(!picked.some((p) => p.includes('ribs of black rock')), 'clean prose must be left alone');
+  assert.ok(!picked.some((p) => /^Chapter 1/.test(p)), 'headings carry structure and must not be rewritten');
+  // Every target says why, so the instruction can be checked.
+  for (const target of targets) assert.ok(target.reason.length > 10, target.reason);
+});
+
+test('a rewrite that is not a rewrite is refused', async () => {
+  const { checkRevision } = await import('../audit.ts');
+  const original = 'The keeper was gone and the light had failed, and Marin climbed anyway.';
+
+  // The failure that would quietly wreck a book: a model answering instead of
+  // rewriting, or summarising a page into a sentence.
+  for (const [bad, why] of [
+    ['', 'empty'],
+    [original, 'identical'],
+    ["Here's the revised passage: she climbed.", 'preamble'],
+    ['Sure! The keeper had gone, and still she climbed the stair.', 'preamble'],
+    ['- keeper gone\n- Marin climbs', 'notes'],
+    ['She climbed.', 'summarised'],
+    [`${original} ${original} ${original}`, 'padded'],
+  ]) {
+    assert.equal(checkRevision(original, bad).acceptable, false, `should refuse (${why}): ${bad.slice(0, 40)}`);
+  }
+
+  // A genuine rewrite of similar length is accepted.
+  const good = 'The keeper had gone and the lamp stood dark, and Marin went up the stair regardless.';
+  assert.equal(checkRevision(original, good).acceptable, true, checkRevision(original, good).reason);
+});
+
+test('applying revisions replaces only what was accepted', async () => {
+  const { applyRevisions } = await import('../audit.ts');
+  const text = 'Chapter 1: A\n\nFirst paragraph.\n\nSecond paragraph.\n\nThird paragraph.';
+
+  const { text: out, changes } = applyRevisions(text, new Map([[2, 'Second paragraph, rewritten.']]));
+
+  assert.match(out, /Chapter 1: A/);
+  assert.match(out, /First paragraph\./);
+  assert.match(out, /Second paragraph, rewritten\./);
+  assert.match(out, /Third paragraph\./);
+  assert.ok(!out.includes('Second paragraph.\n'), 'the original was not replaced');
+  assert.equal(out.split('\n\n').length, 4, 'paragraph count must not change');
+  assert.match(changes[0], /Rewrote 1 paragraph/);
+});
+
+test('revising nothing leaves the manuscript byte-identical', async () => {
+  const { applyRevisions, planRevision } = await import('../audit.ts');
+  const clean = [
+    'Chapter 1: Low Water',
+    '',
+    'The tide had gone out further than Marin remembered, exposing ribs of black rock.',
+    '',
+    '"You came back," her mother said, not turning from the window.',
+  ].join('\n');
+
+  assert.deepEqual(planRevision(clean), [], 'clean prose must not be targeted');
+  assert.equal(applyRevisions(clean, new Map()).text, clean.split(/\n{2,}/).map((p) => p.trim()).join('\n\n'));
+});

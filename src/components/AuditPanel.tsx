@@ -42,6 +42,7 @@ export default function AuditPanel() {
   const [fixedText, setFixedText] = useState<string | null>(null);
   const [changes, setChanges] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
+  const [revision, setRevision] = useState<{ revised: number; skipped: number; targets: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const sourceRef = useRef<File | null>(null);
@@ -87,6 +88,51 @@ export default function AuditPanel() {
       setReport(payload.after as unknown as Report);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'The fix failed.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /**
+   * Rewrites the flagged prose. Separate from "Fix errors" on purpose: that one
+   * only deletes, this one changes the author's words, so it is a deliberate
+   * second decision rather than something bundled into the first.
+   */
+  const revise = async () => {
+    if (!sourceRef.current) return;
+    setBusy('Rewriting the flagged passages…');
+    setError(null);
+    try {
+      // Start from the cleaned text when it exists, so deletions are not undone.
+      let base = fixedText;
+      if (base === null) {
+        const form = new FormData();
+        form.append('file', sourceRef.current);
+        const cleaned = await fetch('/api/book/fix', { method: 'POST', body: form });
+        const payload = await readJson(cleaned);
+        if (!cleaned.ok) throw new Error(String(payload.error ?? 'Could not prepare the text.'));
+        base = String(payload.text);
+        setChanges((payload.changes as string[]) ?? []);
+      }
+
+      const response = await fetch('/api/book/revise', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: base }),
+      });
+      const payload = await readJson(response);
+      if (!response.ok) throw new Error(String(payload.error ?? 'The rewrite failed.'));
+
+      setFixedText(String(payload.text));
+      setChanges((prev) => [...prev, ...((payload.changes as string[]) ?? [])]);
+      setReport(payload.after as unknown as Report);
+      setRevision({
+        revised: Number(payload.revised) || 0,
+        skipped: Number(payload.skipped) || 0,
+        targets: Number(payload.targets) || 0,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'The rewrite failed.');
     } finally {
       setBusy(null);
     }
@@ -210,11 +256,25 @@ export default function AuditPanel() {
 
           {manual.length > 0 && (
             <div className="bg-[#111114] border border-[#27272A] rounded-2xl p-4 space-y-3">
-              <h3 className="text-[10px] uppercase font-mono font-bold text-[#71717A] tracking-wider flex items-center gap-1.5">
-                <ShieldCheck className="w-3.5 h-3.5" /> Needs your judgment
-              </h3>
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <h3 className="text-[10px] uppercase font-mono font-bold text-[#71717A] tracking-wider flex items-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5" /> Needs rewriting
+                </h3>
+                <button
+                  type="button"
+                  onClick={revise}
+                  disabled={Boolean(busy)}
+                  className="px-4 py-2 bg-[#18181B] border border-[#D4AF37]/40 text-[#D4AF37] hover:bg-[#D4AF37]/10 disabled:opacity-40 font-bold text-[11px] uppercase tracking-wider rounded-xl cursor-pointer"
+                >
+                  Revise prose
+                </button>
+              </div>
               <p className="text-[10px] text-[#71717A] leading-relaxed">
-                No button can fix these without rewriting your book, so they are counted and located instead.
+                These cannot be fixed by deleting — the only fix is different sentences.{' '}
+                <strong className="text-[#A1A1AA]">Revise prose rewrites your words</strong> using the AI key on this
+                deployment, touching only the flagged paragraphs and leaving headings and structure alone. Every
+                rewrite is checked for length and meaning before it is accepted; anything that looks like a summary or
+                a note is refused and the original kept. Read the result before you publish it.
               </p>
               {manual.map((finding, index) => (
                 <Row key={index} finding={finding} />
@@ -227,6 +287,12 @@ export default function AuditPanel() {
               <h3 className="text-[10px] uppercase font-mono font-bold text-emerald-300 tracking-wider">
                 Fixed — {changes.length === 0 ? 'nothing needed removing' : 'what changed'}
               </h3>
+              {revision && (
+                <p className="text-[11px] text-[#A1A1AA]">
+                  · Rewrote {revision.revised} of {revision.targets} flagged passages
+                  {revision.skipped > 0 && `; ${revision.skipped} kept unchanged because the rewrite failed its check`}.
+                </p>
+              )}
               {changes.map((change) => (
                 <p key={change} className="text-[11px] text-[#A1A1AA]">
                   · {change}

@@ -159,11 +159,15 @@ export default function ConverterPanel() {
   // Whatever is actually enforced — the deployment platform caps request
   // bodies well below what the server would otherwise accept.
   const [maxUploadBytes, setMaxUploadBytes] = useState<number | null>(null);
+  const [uploadCappedByPlatform, setUploadCappedByPlatform] = useState(false);
 
   useEffect(() => {
     fetch('/api/health')
       .then((r) => r.json())
-      .then((info) => setMaxUploadBytes(Number(info.maxUploadBytes) || null))
+      .then((info) => {
+        setMaxUploadBytes(Number(info.maxUploadBytes) || null);
+        setUploadCappedByPlatform(Boolean(info.uploadCappedByPlatform));
+      })
       .catch(() => setMaxUploadBytes(null));
   }, []);
   const [targetFormat, setTargetFormat] = useState<TargetFormat>('docx');
@@ -288,7 +292,9 @@ export default function ConverterPanel() {
         updateProgress(i, {
           status: 'error',
           percent: 100,
-          error: `${size} MB is over the ${limit} MB upload limit, so this one was not sent. Split it, or remove embedded images.`,
+          error: uploadCappedByPlatform
+            ? `${size} MB is over the ${limit} MB this host allows, so it was not sent. Running BookForge locally raises the limit to 50 MB.`
+            : `${size} MB is over the ${limit} MB upload limit, so this one was not sent. Split it, or remove embedded images.`,
         });
         continue;
       }

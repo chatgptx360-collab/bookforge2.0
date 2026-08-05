@@ -373,3 +373,132 @@ export function applyMechanicalFixes(text: string): FixResult {
 
   return { text: kept.join('\n\n'), changes };
 }
+
+// ---------------------------------------------------------------------------
+// Prose revision
+//
+// The mechanical fixes above only delete. These are the findings that cannot
+// be resolved that way: a line of dialogue repeated eleven times, prose leaning
+// on stock phrases. The only real fix is different sentences, so this selects
+// exactly which paragraphs need rewriting and checks what comes back.
+//
+// No rewriting happens here — this module stays free of network calls and
+// models so it remains testable and deterministic. It decides *what* to send
+// and validates the reply; server.ts does the sending.
+// ---------------------------------------------------------------------------
+
+export interface RevisionTarget {
+  /** Index into the paragraph array, so a reply can be put back in place. */
+  index: number;
+  text: string;
+  /** Why this paragraph was picked — becomes the instruction to the model. */
+  reason: string;
+}
+
+/**
+ * Picks the paragraphs worth rewriting, and only those.
+ *
+ * Sending a whole book to be "improved" would rewrite prose that was fine and
+ * lose the author's voice wholesale. A paragraph is a target only if something
+ * countable is wrong with it: it contains a line of dialogue that recurs, or it
+ * is dense with stock phrasing.
+ */
+export function planRevision(text: string, maxTargets = 120): RevisionTarget[] {
+  const paras = paragraphs(text);
+
+  const spoken = dialogueLines(text);
+  const overused = new Set(topRepeats(spoken, 3).map((entry) => normalise(entry.value)));
+
+  const targets: RevisionTarget[] = [];
+
+  for (let index = 0; index < paras.length; index++) {
+    const paragraph = paras[index];
+    // Headings carry the book's structure; rewriting them breaks navigation.
+    if (isHeading(paragraph) || hasNoSpeech(paragraph)) continue;
+
+    const reasons: string[] = [];
+
+    const repeated = dialogueLines(paragraph).filter((line) => overused.has(normalise(line)));
+    if (repeated.length > 0) {
+      reasons.push(
+        `the line ${repeated.map((r) => `"${r}"`).join(' and ')} is used repeatedly across the book; ` +
+          'say the same thing differently here',
+      );
+    }
+
+    const lower = paragraph.toLowerCase();
+    const stock = STOCK_PHRASES.filter((phrase) => lower.includes(phrase));
+    if (stock.length > 0) {
+      reasons.push(`replace the worn phrasing: ${stock.map((s) => `"${s}"`).join(', ')}`);
+    }
+
+    if (reasons.length > 0) targets.push({ index, text: paragraph, reason: reasons.join('; ') });
+  }
+
+  return targets.slice(0, maxTargets);
+}
+
+/** True when a piece has nothing a voice could say — punctuation, a scene break. */
+function hasNoSpeech(piece: string): boolean {
+  return !/[\p{L}\p{N}]/u.test(piece);
+}
+
+export interface RevisionCheck {
+  acceptable: boolean;
+  reason: string;
+}
+
+/**
+ * Decides whether a rewritten paragraph may replace the original.
+ *
+ * A model asked to improve prose will sometimes summarise it, answer it, or
+ * return a note about what it changed. Any of those would silently destroy a
+ * page of a book, so a replacement has to look like a replacement: roughly the
+ * same length, actually different, and free of the tells of a model talking
+ * about the task instead of doing it.
+ */
+export function checkRevision(original: string, revised: string): RevisionCheck {
+  const clean = revised.trim();
+  if (!clean) return { acceptable: false, reason: 'empty reply' };
+
+  if (normalise(clean) === normalise(original)) {
+    return { acceptable: false, reason: 'unchanged' };
+  }
+
+  // Commentary rather than prose.
+  if (/^(here('s| is)|sure|certainly|revised|rewritten|i (have|'ve))\b/i.test(clean)) {
+    return { acceptable: false, reason: 'the reply talks about the text instead of being it' };
+  }
+  if (/```|^\s*[-*]\s|\bAs an AI\b/i.test(clean)) {
+    return { acceptable: false, reason: 'the reply is formatted as notes, not prose' };
+  }
+
+  // Length: a summary is far shorter, a ramble far longer. Both lose the book.
+  const before = words(original).length;
+  const after = words(clean).length;
+  if (before >= 12 && (after < before * 0.55 || after > before * 1.9)) {
+    return {
+      acceptable: false,
+      reason: `length changed too much (${before} words to ${after})`,
+    };
+  }
+
+  return { acceptable: true, reason: 'ok' };
+}
+
+/** Puts accepted rewrites back where they came from, leaving everything else. */
+export function applyRevisions(text: string, revisions: Map<number, string>): FixResult {
+  const paras = paragraphs(text);
+  const changes: string[] = [];
+  let replaced = 0;
+
+  const out = paras.map((paragraph, index) => {
+    const revised = revisions.get(index);
+    if (!revised) return paragraph;
+    replaced++;
+    return revised.trim();
+  });
+
+  if (replaced) changes.push(`Rewrote ${replaced} paragraph${replaced === 1 ? '' : 's'}.`);
+  return { text: out.join('\n\n'), changes };
+}

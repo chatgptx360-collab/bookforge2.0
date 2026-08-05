@@ -2,7 +2,7 @@
   "name": "bookforge",
   "private": true,
   "version": "2.0.0",
-  "description": "BookForge — universal manuscript file converter, reader and editor.",
+  "description": "BookForge \u2014 universal manuscript file converter, reader and editor.",
   "type": "module",
   "engines": {
     "node": ">=22.0.0"
@@ -16,7 +16,9 @@
     "preview": "vite preview",
     "clean": "node -e \"const fs=require('fs');for(const p of ['dist','server-build','server.js','server.cjs'])fs.rmSync(p,{recursive:true,force:true});\"",
     "lint": "tsc --noEmit",
-    "test": "npm run build:server && cross-env BOOKFORGE_NO_LISTEN=1 node --test tests/*.test.mjs"
+    "test": "npm run build:server && cross-env BOOKFORGE_NO_LISTEN=1 node --test tests/*.test.mjs",
+    "test:browser": "npm run build:server && node tests/run-browser.mjs",
+    "test:all": "npm test && npm run test:browser"
   },
   "dependencies": {
     "@breezystack/lamejs": "^1.2.7",
@@ -51,6 +53,7 @@
     "@vitejs/plugin-react": "^5.0.4",
     "cross-env": "^10.1.0",
     "esbuild": "^0.25.0",
+    "playwright": "^1.62.1",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",

@@ -18,7 +18,13 @@ import dotenv from 'dotenv';
 export { auditManuscript, applyMechanicalFixes } from './audit';
 export type { AuditReport, AuditFinding, AuditCategory } from './audit';
 
-import { auditManuscript as runAudit, applyMechanicalFixes as runFixes } from './audit';
+import {
+  auditManuscript as runAudit,
+  applyMechanicalFixes as runFixes,
+  planRevision,
+  checkRevision,
+  applyRevisions,
+} from './audit';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import mammoth from 'mammoth';
 import multer from 'multer';
@@ -37,7 +43,9 @@ const PORT = Number(process.env.PORT ?? 3000);
  * limit now matches whatever actually enforces it, and the client is told what
  * it is so an oversized file fails instantly instead of being sent.
  */
-const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || (process.env.VERCEL ? 4 : 25);
+const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || (process.env.VERCEL ? 4 : 50);
+/** True when a platform below us imposes a stricter cap than we asked for. */
+const UPLOAD_CAPPED_BY_PLATFORM = Boolean(process.env.VERCEL) && !process.env.MAX_UPLOAD_MB;
 const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 
 export const app = express();
@@ -2236,6 +2244,74 @@ app.post('/api/book/fix', upload.single('file'), async (req, res) => {
   }
 });
 
+
+/**
+ * Rewrites the paragraphs the audit could not fix by deleting.
+ *
+ * This is the one operation in the app that changes an author's words, so it
+ * is deliberately narrow: only paragraphs the audit flagged, one at a time,
+ * each reply checked before it is allowed to replace anything, and the
+ * rejected ones reported rather than hidden. A paragraph that fails its check
+ * keeps the original — a book is never left worse than it arrived.
+ */
+app.post('/api/book/revise', async (req, res) => {
+  try {
+    const text = typeof req.body?.text === 'string' ? req.body.text : '';
+    if (!text.trim()) {
+      res.status(400).json({ error: 'Send a "text" field to revise.' });
+      return;
+    }
+    if (!geminiClient && !process.env.OPENROUTER_API_KEY) throw new AiUnavailableError();
+
+    const targets = planRevision(text, Number(req.body?.maxTargets) || 120);
+    if (targets.length === 0) {
+      res.json({ text, changes: [], revised: 0, skipped: 0, targets: 0, before: runAudit(text), after: runAudit(text) });
+      return;
+    }
+
+    const accepted = new Map<number, string>();
+    const rejected: { index: number; reason: string }[] = [];
+
+    for (const target of targets) {
+      const prompt = [
+        'Rewrite the passage below from a novel. Keep the same events, characters,',
+        'point of view, tense and meaning. Keep roughly the same length. Preserve',
+        'paragraph breaks and any dialogue punctuation style.',
+        `Problem to fix: ${target.reason}.`,
+        'Reply with the rewritten passage only — no preamble, no notes, no quotes',
+        'around it.',
+        '',
+        'PASSAGE:',
+        target.text,
+      ].join('\n');
+
+      try {
+        const response = await generateContentWithRetry({ contents: prompt });
+        const revised = (response.text ?? '').trim();
+        const verdict = checkRevision(target.text, revised);
+        if (verdict.acceptable) accepted.set(target.index, revised);
+        else rejected.push({ index: target.index, reason: verdict.reason });
+      } catch (error) {
+        rejected.push({ index: target.index, reason: error instanceof Error ? error.message : 'request failed' });
+      }
+    }
+
+    const result = applyRevisions(text, accepted);
+    res.json({
+      text: result.text,
+      changes: result.changes,
+      revised: accepted.size,
+      skipped: rejected.length,
+      targets: targets.length,
+      rejected: rejected.slice(0, 10),
+      before: runAudit(text),
+      after: runAudit(result.text),
+    });
+  } catch (error) {
+    handleError(res, error, 'Failed to revise the manuscript');
+  }
+});
+
 // ---------------------------------------------------------------------------
 // API — health
 // ---------------------------------------------------------------------------
@@ -2249,6 +2325,8 @@ app.get('/api/health', (_req, res) => {
     // The client checks against this before sending, so the number has to be
     // the one that is actually enforced.
     maxUploadBytes: MAX_UPLOAD_BYTES,
+    // So the converter can explain a small limit rather than just enforce it.
+    uploadCappedByPlatform: UPLOAD_CAPPED_BY_PLATFORM,
     // Non-null when a second provider is configured to take over on failure.
     fallback: geminiClient && process.env.OPENROUTER_API_KEY ? 'openrouter' : null,
     // Speech is Gemini-only; OpenRouter has no equivalent audio modality.
