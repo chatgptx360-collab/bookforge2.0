@@ -6,5 +6,9 @@
  * this file exists to prevent.
  */
 declare module 'mammoth/mammoth.browser.js' {
-  export function convertToHtml(input: { arrayBuffer: ArrayBuffer }): Promise<{ value: string }>;
+  export function convertToHtml(
+    input: { arrayBuffer: ArrayBuffer },
+    options?: { convertImage?: unknown },
+  ): Promise<{ value: string }>;
+  export const images: { imgElement(convert: () => Record<string, string>): unknown };
 }

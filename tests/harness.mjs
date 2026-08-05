@@ -259,8 +259,11 @@ export async function bigDocx(lines, padMegabytes) {
   const document = new Document({
     sections: [
       {
+        // "Chapter 4: Drift" is a heading; "Chapter 4, paragraph 2" is not.
+        // A looser test made every body line a heading and collapsed the book
+        // into one section.
         children: lines.map((line) =>
-          /^Chapter /.test(line)
+          /^Chapter \d+:/.test(line)
             ? new Paragraph({ text: line, heading: HeadingLevel.HEADING_1 })
             : new Paragraph(line),
         ),

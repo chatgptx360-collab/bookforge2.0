@@ -16,7 +16,11 @@
  */
 
 interface Mammoth {
-  convertToHtml(input: { arrayBuffer: ArrayBuffer }): Promise<{ value: string }>;
+  convertToHtml(
+    input: { arrayBuffer: ArrayBuffer },
+    options?: { convertImage?: unknown },
+  ): Promise<{ value: string }>;
+  images: { imgElement(convert: () => Record<string, string>): unknown };
 }
 
 let loading: Promise<Mammoth> | null = null;
@@ -50,7 +54,16 @@ export async function extractDocxHtml(file: File): Promise<string | null> {
   if (!isDocx(file)) return null;
   try {
     const mammoth = await load();
-    const { value } = await mammoth.convertToHtml({ arrayBuffer: await file.arrayBuffer() });
+    const { value } = await mammoth.convertToHtml(
+      { arrayBuffer: await file.arrayBuffer() },
+      {
+        // Mammoth inlines every image as a base64 data URI by default, which
+        // would make the markup *larger* than the file it replaces — a 20 MB
+        // illustrated book became 27 MB of HTML and was rejected outright.
+        // The server discards images anyway, so they are dropped here.
+        convertImage: mammoth.images.imgElement(() => ({})),
+      },
+    );
     return value.trim() ? value : null;
   } catch {
     return null;

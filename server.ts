@@ -2157,13 +2157,19 @@ function baseNameOf(fileName: string): string {
   return path.basename(fileName, path.extname(fileName));
 }
 
-function deriveTitle(text: string, fileName: string): string {
+export function deriveTitle(text: string, fileName: string): string {
   const firstLine = text
     .split('\n')
     .map((line) => line.trim())
     .find(Boolean);
-  if (firstLine && firstLine.length <= 120) return firstLine.replace(/^#+\s*/, '');
-  return baseNameOf(fileName);
+  if (!firstLine || firstLine.length > 120) return baseNameOf(fileName);
+
+  // A manuscript that opens straight into chapter one has no title line, and
+  // taking the heading anyway puts it on the title page and again at the top of
+  // chapter one. That is exactly the duplication stores reject — the file name
+  // is a worse title but an honest one.
+  if (NUMBERED_HEADING.test(firstLine) || NAMED_SECTIONS.test(firstLine)) return baseNameOf(fileName);
+  return firstLine.replace(/^#+\s*/, '');
 }
 
 // ---------------------------------------------------------------------------

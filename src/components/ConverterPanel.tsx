@@ -295,7 +295,11 @@ export default function ConverterPanel() {
       // A DOCX is unwrapped here, so what travels is the manuscript rather than
       // the packaging around it and the upload limit stops applying. Anything
       // else — and any DOCX this fails on — is sent whole, as before.
-      const extractedHtml = await extractDocxHtml(f);
+      const extracted = await extractDocxHtml(f);
+      // Markup that is itself over the limit would only fail later and less
+      // clearly, so it is discarded and the ordinary size rules take over.
+      const extractedHtml =
+        extracted && (!maxUploadBytes || new Blob([extracted]).size < maxUploadBytes) ? extracted : null;
 
       // Refuse an oversized file rather than spending minutes uploading it only
       // for the platform to reject the body at the edge.

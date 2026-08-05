@@ -43,10 +43,10 @@ same Express app that serves the API, so the client and API share one origin.
 
 **Running locally is not just for development.** The deployed app inherits
 Vercel's limits — request bodies capped near 4.5 MB and functions killed at 60
-seconds — and neither applies on your own machine. Locally the upload ceiling is
-25 MB (raise it with `MAX_UPLOAD_MB=200`), a long conversion cannot time out,
-and nothing is uploaded anywhere. For batches of large manuscripts that is the
-difference between working and not.
+seconds — and neither applies on your own machine. A DOCX is unwrapped in the
+browser so its size never mattered anyway, but for every other format the local
+ceiling is 50 MB (raise it with `MAX_UPLOAD_MB=200`), a long conversion cannot
+time out, and nothing is uploaded anywhere.
 
 ### Scripts
 
@@ -79,7 +79,7 @@ different Node ABI — reinstall on Node 22 LTS.
 | `AI_RATE_LIMIT` | optional | Text AI calls per IP per hour (default 40) |
 | `TTS_RATE_LIMIT` | optional | Speech calls per IP per hour (default 4000 — a book is thousands of passages) |
 | `CONVERT_RATE_LIMIT` | optional | Conversions per IP per hour (default 120) |
-| `MAX_UPLOAD_MB` | optional | Upload cap per file; defaults to 4 on Vercel, 25 locally |
+| `MAX_UPLOAD_MB` | optional | Upload cap per file; defaults to 4 on Vercel, 50 otherwise. Does not apply to DOCX, which is unwrapped in the browser |
 | `PORT` | optional | Defaults to `3000` |
 
 Conversion, parsing and all DOCX/EPUB/PDF/RTF export routes need **no** API key.
@@ -365,19 +365,37 @@ src/utils/kokoroVoices.ts  Kokoro catalogue (no model code, so it stays light)
 src/utils/sessionStore.ts  IndexedDB autosave for both speech views
 src/utils/readerStore.ts   Per-book position, bookmarks, highlights, settings
 src/utils/docxExporter.ts  Client-side KDP DOCX builder (lazy-loaded)
+src/utils/docx.ts          Browser-side DOCX unwrapping, so size stops mattering
 tests/conversion.test.mjs  Round-trip and format-validity tests
+tests/*.browser.mjs        The app driven through a real browser
 ```
 
 ## Tests
 
 ```bash
-npm test
+npm test           # 47 unit tests
+npm run test:browser   # 17 browser tests, suites run one at a time
+npm run test:all       # both
+npm run test:kokoro    # loads the real voice model — opt-in, downloads ~92 MB
 ```
 
 CI runs the same suite on Node 22 and 24, fails if the server bundle ever lands
 in the published `dist/`, and validates a generated EPUB with EPUBCheck 5.2.1.
 
-Covers manuscript structure parsing, EPUB 3.0 package validity (mimetype offset and
-storage method, manifest/spine integrity, no NCX), DOCX/PDF/RTF round-trips through
-the extractors, the ZIP writer, entity decoding, JSON self-healing, and speech
-chunk planning (no chunk over the limit, no text lost, sentence-boundary splits).
+The unit tests cover manuscript structure parsing, EPUB 3.0 package validity
+(mimetype offset and storage method, manifest/spine integrity, no NCX),
+DOCX/PDF/RTF round-trips through the extractors, the ZIP writer, entity
+decoding, JSON self-healing, speech chunk planning (no chunk over the limit, no
+text lost, sentence-boundary splits), the manuscript audit and its fixes, and
+that browser-extracted DOCX markup produces blocks identical to the file.
+
+The browser tests drive the real UI: a narration run with autosave surviving a
+hard refresh, section skipping, redo, stop-is-not-failure, the audit and its
+fix, prose revision and the guard that refuses a reply which is not a rewrite,
+an oversized upload refused before it is sent, a 6 MB DOCX converting anyway
+because it is unwrapped locally, and cross-origin isolation on every view.
+
+`test:kokoro` is separate because it downloads the voice model. It generates
+real speech and inspects the waveform — length against the sentence, loudness,
+and energy rising and falling between syllables — so it fails on silence or a
+tone rather than merely on a missing file.

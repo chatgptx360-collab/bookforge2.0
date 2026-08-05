@@ -974,3 +974,21 @@ test('unwrapping a DOCX in the browser gives the server exactly what a file woul
   assert.deepEqual(fromBrowser, fromFile);
   assert.match(blocksToPlainText(fromBrowser), /ribs of black rock/);
 });
+
+test('a book that opens on chapter one does not take that heading as its title', () => {
+  const { deriveTitle } = require('../server-build/server.cjs');
+  const manuscript = [
+    'Chapter 1: Low Water',
+    '',
+    'The tide had gone out further than Marin remembered.',
+  ].join('\n');
+
+  // Taking the heading would print it on the title page and again at the top of
+  // chapter one, which is the first repetition a store's duplication check
+  // counts — and the reason a real book of this shape scored 38/100.
+  assert.equal(deriveTitle(manuscript, 'the-lamp-keeper.docx'), 'the-lamp-keeper');
+  assert.equal(deriveTitle('Prologue\n\nBefore any of it.', 'salt-and-iron.docx'), 'salt-and-iron');
+
+  // A real title line is still used.
+  assert.equal(deriveTitle('The Lamp Keeper\n\nChapter 1: Low Water', 'x.docx'), 'The Lamp Keeper');
+});

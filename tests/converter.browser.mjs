@@ -8,12 +8,31 @@
 
 import assert from 'node:assert/strict';
 import { test, before, after } from 'node:test';
+import { writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import AdmZip from 'adm-zip';
 import { bigDocx, openPage, startServer, stubSpeech, upload, withBrowser } from './harness.mjs';
 
 let server;
 // One megabyte, so an oversized file is cheap to construct.
 before(async () => { server = await startServer({ MAX_UPLOAD_MB: '1' }); });
 after(async () => { await server?.stop(); });
+
+const CHAPTER_TITLES = [
+  'Low Water', 'The Keeper', 'Salt and Iron', 'What the Tide Left', 'Nine Fathoms',
+  'The Long Room', 'Her Mothers Hands', 'Coldharbour', 'The Second Lamp', 'Drift',
+  'A Letter Unsent', 'The Wreck of the Ardent', 'Storm Glass', 'Northerly', 'The Quiet Hour',
+  'What Marin Knew', 'The Turning', 'Deep Water', 'Landfall', 'Low Water Again',
+];
+
+const BODY = [
+  'The tide had gone out further than she remembered, exposing ribs of black rock.',
+  'Salt had eaten the hinges to lace, and the door gave without being asked.',
+  'She counted the steps aloud, the way frightened people count anything.',
+  'The lamp room smelled of paraffin and of something older underneath it.',
+  'Nothing moved on the water, and that was the wrong kind of quiet.',
+];
 
 test('an oversized file is refused before it is uploaded', async () => {
   await withBrowser(async (context) => {
@@ -77,6 +96,69 @@ test('a DOCX far over the limit converts anyway, because it is unwrapped here', 
     assert.ok(posted > 0, 'nothing was posted');
     assert.ok(posted < 1024 * 1024, `${posted} bytes was sent for a ${docx.length}-byte file`);
     assert.deepEqual(page.pageErrors, []);
+  });
+});
+
+test('a whole twenty-chapter book survives the trip', async () => {
+  const lines = [];
+  for (let c = 1; c <= 20; c++) {
+    lines.push(`Chapter ${c}: ${CHAPTER_TITLES[c - 1]}`);
+    for (let p = 0; p < 6; p++) {
+      lines.push(`Chapter ${c}, paragraph ${p + 1}. ${BODY[(c + p) % BODY.length]}`);
+    }
+  }
+  const docx = await bigDocx(lines, 6);
+
+  await withBrowser(async (context) => {
+    const page = await openPage(context);
+    await page.goto(`${server.base}/converter`, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(800);
+
+    // By path rather than by buffer: a large file as base64 over the debug
+    // protocol does not arrive, and the page simply never sees it.
+    const source = join(tmpdir(), `bookforge-twenty-${process.pid}.docx`);
+    writeFileSync(source, docx);
+    try {
+      await page.locator('input[type=file]').first().setInputFiles(source);
+      await page.locator('#target-format').waitFor({ timeout: 60_000 });
+      await page.locator('#target-format').selectOption('epub');
+
+      const [download] = await Promise.all([
+        page.waitForEvent('download', { timeout: 180_000 }),
+        page.getByRole('button', { name: /convert/i }).last().click(),
+      ]);
+
+      const chunks = [];
+      for await (const chunk of await download.createReadStream()) chunks.push(chunk);
+      const zip = new AdmZip(Buffer.concat(chunks));
+      const names = zip.getEntries().map((e) => e.entryName);
+
+      const chapters = names.filter((n) => /chapter\d+\.xhtml$/.test(n));
+      assert.equal(chapters.length, 20, `${chapters.length} chapters came out of a twenty-chapter book`);
+
+      const headings = names
+        .filter((n) => /\.xhtml$/.test(n))
+        .flatMap((n) => [...zip.readAsText(n).matchAll(/<h1[^>]*>([\s\S]*?)<\/h1>/g)])
+        .map((m) => m[1].replace(/<[^>]+>/g, '').trim());
+      const repeated = headings.filter((h, i) => headings.indexOf(h) !== i);
+      // A title page repeating chapter one is the duplication stores count first.
+      assert.deepEqual(repeated, [], `headings appear twice: ${repeated}`);
+
+      const text = names
+        .filter((n) => /chapter\d+\.xhtml$/.test(n))
+        .map((n) => zip.readAsText(n).replace(/<[^>]+>/g, ' '))
+        .join(' ');
+      for (const title of CHAPTER_TITLES) {
+        assert.ok(text.includes(title), `"${title}" is missing from the EPUB`);
+      }
+      assert.ok(text.includes('Chapter 20, paragraph 6'), 'the last paragraph of the last chapter was lost');
+
+      const opf = zip.readAsText(names.find((n) => n.endsWith('.opf')));
+      assert.match(opf, /<package[^>]*version="3\.0"/, 'not an EPUB 3.0 package');
+      assert.deepEqual(page.pageErrors, []);
+    } finally {
+      rmSync(source, { force: true });
+    }
   });
 });
 

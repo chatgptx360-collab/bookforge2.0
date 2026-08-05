@@ -58,7 +58,7 @@ Deploys to Vercel as one serverless function at /api
   src/utils/docx.ts          Browser-side DOCX unwrapping, so size stops mattering
   tests/conversion.test.mjs  45 unit tests, node --test, against the built CJS
   tests/harness.mjs          Shared Playwright harness (server, stubs, fixtures)
-  tests/*.browser.mjs        16 browser tests: audiobook, check, converter
+  tests/*.browser.mjs        17 browser tests: audiobook, check, converter
   tests/kokoro.browser.mjs   Opt-in: the real model, and what it actually says
   tests/run-browser.mjs      Runs the browser suites one file at a time
 
@@ -66,8 +66,8 @@ Scripts:
   npm run dev     tsx server.ts  (Vite in middleware mode; use this)
   npm run build   vite build + esbuild the server
   npm start       serve the built client + API
-  npm test        build:server then node --test  (46 unit tests)
-  npm run test:browser  the Playwright suites, serialised (16 tests)
+  npm test        build:server then node --test  (47 unit tests)
+  npm run test:browser  the Playwright suites, serialised (17 tests)
   npm run test:all      both of the above
   npm run test:kokoro   loads the real voice model and checks the audio;
                         opt-in, downloads ~92 MB, takes about a minute
@@ -163,7 +163,7 @@ MANUSCRIPT CHECK
 -------------------------------------------------------------------------------
 
 VERIFIED
-  - 46 unit tests and 16 browser tests pass (npm run test:all). tsc --noEmit
+  - 47 unit tests and 17 browser tests pass (npm run test:all). tsc --noEmit
     clean. Build clean.
   - EPUB validity against real EPUBCheck 5.2.1.
   - The committed Playwright suites cover: a full narration run, autosave
@@ -180,6 +180,11 @@ VERIFIED
   - A 6 MB DOCX converts against a 1 MB server limit, with under 1 MB leaving
     the browser, because the client unwraps DOCX itself. A unit test asserts
     the blocks from that path are deep-equal to the blocks from the file.
+  - A FULL 20-CHAPTER BOOK converts. A 20 MB illustrated manuscript (35,905
+    words, a plate per chapter) went through the UI against a 4 MB server in
+    10.5 seconds, posting 198 KB. All 20 chapters came out, every title
+    intact, EPUB 3.0, valid, no repeated headings. A committed browser test
+    holds that ground.
 
 NOT VERIFIED — IMPORTANT
   - A WHOLE BOOK has not been narrated end to end. One sentence has, and a
