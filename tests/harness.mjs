@@ -243,6 +243,36 @@ export const CLEAN = [
   'Marin counted the steps aloud, the way frightened people count anything.',
 ].join('\n');
 
+/**
+ * A real DOCX that is mostly not words.
+ *
+ * This is the shape of the file that broke the converter: a manuscript whose
+ * size comes from embedded media, not text. The filler is random so the zip
+ * cannot compress it away, and it sits under word/media where a picture would
+ * — Word and mammoth both ignore parts they were not told about.
+ */
+export async function bigDocx(lines, padMegabytes) {
+  const { Document, Packer, Paragraph, HeadingLevel } = await import('docx');
+  const { default: AdmZip } = await import('adm-zip');
+  const { randomBytes } = await import('node:crypto');
+
+  const document = new Document({
+    sections: [
+      {
+        children: lines.map((line) =>
+          /^Chapter /.test(line)
+            ? new Paragraph({ text: line, heading: HeadingLevel.HEADING_1 })
+            : new Paragraph(line),
+        ),
+      },
+    ],
+  });
+
+  const zip = new AdmZip(await Packer.toBuffer(document));
+  zip.addFile('word/media/filler.bin', randomBytes(padMegabytes * 1024 * 1024));
+  return zip.toBuffer();
+}
+
 export const upload = (page, name, body) =>
   page.locator('input[type=file]').first().setInputFiles({
     name,

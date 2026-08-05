@@ -55,18 +55,22 @@ Deploys to Vercel as one serverless function at /api
   src/utils/gpu.ts           Hardware-vs-software adapter detection
   src/utils/sessionStore.ts  IndexedDB autosave for both speech views
   src/utils/readerStore.ts   Per-book position, bookmarks, highlights
+  src/utils/docx.ts          Browser-side DOCX unwrapping, so size stops mattering
   tests/conversion.test.mjs  45 unit tests, node --test, against the built CJS
   tests/harness.mjs          Shared Playwright harness (server, stubs, fixtures)
-  tests/*.browser.mjs        15 browser tests: audiobook, check, converter
+  tests/*.browser.mjs        16 browser tests: audiobook, check, converter
+  tests/kokoro.browser.mjs   Opt-in: the real model, and what it actually says
   tests/run-browser.mjs      Runs the browser suites one file at a time
 
 Scripts:
   npm run dev     tsx server.ts  (Vite in middleware mode; use this)
   npm run build   vite build + esbuild the server
   npm start       serve the built client + API
-  npm test        build:server then node --test  (45 unit tests)
-  npm run test:browser  the three Playwright suites, serialised (15 tests)
+  npm test        build:server then node --test  (46 unit tests)
+  npm run test:browser  the Playwright suites, serialised (16 tests)
   npm run test:all      both of the above
+  npm run test:kokoro   loads the real voice model and checks the audio;
+                        opt-in, downloads ~92 MB, takes about a minute
   npm run lint    tsc --noEmit
 
 
@@ -159,7 +163,7 @@ MANUSCRIPT CHECK
 -------------------------------------------------------------------------------
 
 VERIFIED
-  - 45 unit tests and 15 browser tests pass (npm run test:all). tsc --noEmit
+  - 46 unit tests and 16 browser tests pass (npm run test:all). tsc --noEmit
     clean. Build clean.
   - EPUB validity against real EPUBCheck 5.2.1.
   - The committed Playwright suites cover: a full narration run, autosave
@@ -167,13 +171,20 @@ VERIFIED
     the audit, the mechanical fix, the prose revision and its guard,
     upload rejection, the advertised limit matching the enforced one,
     EPUB validity end to end, and cross-origin isolation on every view.
+  - KOKORO REALLY SPEAKS. The model loads, runs and returns audio through the
+    shipped code path; tests/kokoro.browser.mjs downloads the weights, drives
+    the speech view and inspects the WAV that comes out — 24 kHz mono, the
+    right length for the sentence, loud enough to be a voice, and with energy
+    that rises and falls between syllables rather than sitting flat. Run it
+    with `npm run test:kokoro`. It is opt-in because it pulls ~92 MB.
+  - A 6 MB DOCX converts against a 1 MB server limit, with under 1 MB leaving
+    the browser, because the client unwraps DOCX itself. A unit test asserts
+    the blocks from that path are deep-equal to the blocks from the file.
 
 NOT VERIFIED — IMPORTANT
-  - KOKORO HAS NEVER PRODUCED AUDIO IN A TEST. huggingface.co is unreachable
-    from the sandbox this was built in, so the model weights never downloaded.
-    Everything AROUND it is tested — worker messaging, splitting, the
-    completeness guard, WAV/MP3 encoding with synthetic PCM, error paths — but
-    the model itself has never run. FIRST TASK: run a chapter and confirm.
+  - A WHOLE BOOK has not been narrated end to end. One sentence has, and a
+    chapter is only more of the same, but a 20-chapter run has never been
+    watched. See the memory note below.
   - No Gemini speech call has ever been made either. Same reason (no key in the
     build environment). The 429 handling was tested against mocked responses.
   - Long-run memory is untested. A 10-hour audiobook is roughly 1.7 GB of WAV
@@ -184,12 +195,13 @@ NOT VERIFIED — IMPORTANT
 -------------------------------------------------------------------------------
 
 HIGH VALUE
-  1. Confirm Kokoro actually speaks, then confirm a 20-chapter book completes.
-     Watch memory. If it fails, the fix is probably to drop each chapter's PCM
-     after writing its Blob, rather than holding everything.
-  2. Client-side conversion for DOCX. mammoth has a browser build. This would
-     remove the upload limit entirely, which is the single biggest practical
-     constraint on the deployed app (see KNOWN LIMITS below).
+  1. Narrate a 20-chapter book and watch memory. If it fails, the fix is
+     probably to drop each chapter's PCM after writing its Blob, rather than
+     holding everything.
+  2. Do for the other input formats what is now done for DOCX: unwrap them in
+     the browser so their size stops mattering. EPUB is a zip and jszip is
+     already a dependency, so it is the next easy one. PDF needs pdf.js, which
+     is a much larger download.
 
 WORTH DOING
   3. A light theme for the app shell. The reader has four themes; everything
@@ -204,8 +216,11 @@ KNOWN LIMITS, NOT BUGS
   - Vercel rejects request bodies over ~4.5 MB at the edge. The server caps at
     4 MB when VERCEL is set and 50 MB otherwise; MAX_UPLOAD_MB overrides
     either. /api/health reports the real limit and the UI reads it from there,
-    so the number a user is shown is always the number enforced. Running
-    locally is the current answer for large files.
+    so the number a user is shown is always the number enforced.
+    DOCX no longer cares: the browser runs mammoth itself and posts the
+    extracted markup (src/utils/docx.ts -> the sourceHtml field), so a DOCX of
+    any size converts on the deployed app. Everything else is still capped,
+    and running locally is still the answer for those.
   - Vercel functions are killed at 60s. Long conversions need localhost.
   - Rate-limit state is per serverless instance, so limits are approximate.
   - PDF output cannot represent non-Latin scripts.
@@ -277,5 +292,6 @@ KNOWN LIMITS, NOT BUGS
     - Never claim something works that has not been run. The Kokoro gap above
       is documented precisely because it was never verified.
 
-  FIRST THING TO DO: narrate two or three chapters and confirm Kokoro produces
-  audio. Everything else in section 6 assumes it does, and nobody has seen it.
+  FIRST THING TO DO: run `npm run test:all`, then `npm run test:kokoro`. The
+  second one downloads the voice model and proves it still speaks; if that
+  passes, everything in section 6 is standing on solid ground.

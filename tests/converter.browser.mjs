@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict';
 import { test, before, after } from 'node:test';
-import { openPage, startServer, stubSpeech, upload, withBrowser } from './harness.mjs';
+import { bigDocx, openPage, startServer, stubSpeech, upload, withBrowser } from './harness.mjs';
 
 let server;
 // One megabyte, so an oversized file is cheap to construct.
@@ -39,6 +39,43 @@ test('an oversized file is refused before it is uploaded', async () => {
     assert.match(body, /2\.0 MB is over the 1\.0 MB/i, `the offender was not named: ${body.match(/[^\n]*limit[^\n]*/)}`);
     assert.equal(sent, 1, `the oversized file was uploaded anyway (${sent} requests)`);
     assert.ok(!/HTTP 413/.test(body), 'a raw status code reached the user');
+    assert.deepEqual(page.pageErrors, []);
+  });
+});
+
+test('a DOCX far over the limit converts anyway, because it is unwrapped here', async () => {
+  const docx = await bigDocx(['Chapter 1: Deep Water', 'The tide had gone out further than Marin remembered.'], 6);
+  assert.ok(docx.length > 6 * 1024 * 1024, `fixture is only ${docx.length} bytes`);
+
+  await withBrowser(async (context) => {
+    const page = await openPage(context);
+    let posted = -1;
+    await page.route('**/api/book/convert', (route) => {
+      posted = (route.request().postDataBuffer() ?? Buffer.alloc(0)).length;
+      route.continue();
+    });
+
+    await page.goto(`${server.base}/converter`, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(800);
+    await page.locator('input[type=file]').first().setInputFiles({
+      name: 'novel.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      buffer: docx,
+    });
+    await page.waitForTimeout(600);
+    // DOCX to EPUB is the workflow that broke; the default target is PDF.
+    await page.locator('#target-format').selectOption('epub');
+    await page.getByRole('button', { name: /convert/i }).last().click();
+    await page.waitForTimeout(12_000);
+
+    const body = await page.locator('body').innerText();
+    assert.ok(!/is over the/i.test(body), `it was refused for its size: ${body.match(/[^\n]*is over the[^\n]*/)}`);
+    assert.ok(!/HTTP 413|too large/i.test(body), `the host rejected it: ${body.match(/[^\n]*(413|too large)[^\n]*/)}`);
+    assert.match(body, /novel\.epub/, 'no converted file was produced');
+
+    // The whole point: what left the browser was the manuscript, not the file.
+    assert.ok(posted > 0, 'nothing was posted');
+    assert.ok(posted < 1024 * 1024, `${posted} bytes was sent for a ${docx.length}-byte file`);
     assert.deepEqual(page.pageErrors, []);
   });
 });

@@ -110,9 +110,18 @@ Mounted at `/api`, all `POST` unless noted.
 | `/api/tts/plan` | `{ text, maxChars? }` | `{ chunks[], characters, estimatedSeconds }` |
 | `/api/tts/speak` | `{ text, voice?, style? }` — `voice` is the model id | `{ audioBase64, mimeType, sampleRate }` — raw 16-bit PCM; 429 with `retryAfterSeconds` and `quotaScope` when throttled |
 
-**Upload size is capped by the deployment, not by us.** Vercel rejects a
+**A DOCX is unwrapped in your browser, so its size does not matter.** Almost
+none of a Word file is words — it is XML, fonts and embedded images, all of
+which the server throws away. So the client runs mammoth itself and posts the
+extracted markup in a `sourceHtml` field instead of the file. The server uses
+the same library on the same markup, so the conversion is identical; the
+request is a megabyte or two rather than tens. `/api/book/convert`,
+`/api/book/parse-file`, `/api/book/audit` and `/api/book/fix` all accept
+`sourceHtml` + `sourceName` in place of `file`.
+
+**Every other format is capped by the deployment, not by us.** Vercel rejects a
 serverless request body over about 4.5 MB at the edge, before any handler runs,
-so the server caps at 4 MB when `VERCEL` is set and 25 MB locally —
+so the server caps at 4 MB when `VERCEL` is set and 50 MB otherwise —
 `MAX_UPLOAD_MB` overrides either. `GET /api/health` reports the number in
 `maxUploadBytes`, and the converter checks each file against it before sending,
 so an oversized file fails immediately with its own size named instead of

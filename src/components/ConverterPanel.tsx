@@ -17,6 +17,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import type { TargetFormat } from '../types';
+import { extractDocxHtml } from '../utils/docx';
 
 interface ConvertedFile {
   id: string;
@@ -96,10 +97,17 @@ function convertFile(
   targetFormat: string,
   epub: EpubDetails | null,
   onProgress: (percent: number) => void,
+  /** Markup already extracted here, sent in place of the file when available. */
+  extractedHtml: string | null,
 ): Promise<ConversionResult> {
   return new Promise((resolve, reject) => {
     const formData = new FormData();
-    formData.append('file', file);
+    if (extractedHtml) {
+      formData.append('sourceHtml', extractedHtml);
+      formData.append('sourceName', file.name);
+    } else {
+      formData.append('file', file);
+    }
     formData.append('targetFormat', targetFormat);
     if (epub) {
       formData.append('author', epub.author);
@@ -284,16 +292,21 @@ export default function ConverterPanel() {
       setCurrentConvertIdx(i);
       updateProgress(i, { status: 'converting', percent: 5 });
 
-      // Refuse an oversized file here rather than spending minutes uploading it
-      // only for the platform to reject the body at the edge.
-      if (maxUploadBytes && f.size > maxUploadBytes) {
+      // A DOCX is unwrapped here, so what travels is the manuscript rather than
+      // the packaging around it and the upload limit stops applying. Anything
+      // else — and any DOCX this fails on — is sent whole, as before.
+      const extractedHtml = await extractDocxHtml(f);
+
+      // Refuse an oversized file rather than spending minutes uploading it only
+      // for the platform to reject the body at the edge.
+      if (!extractedHtml && maxUploadBytes && f.size > maxUploadBytes) {
         const limit = (maxUploadBytes / (1024 * 1024)).toFixed(1);
         const size = (f.size / (1024 * 1024)).toFixed(1);
         updateProgress(i, {
           status: 'error',
           percent: 100,
           error: uploadCappedByPlatform
-            ? `${size} MB is over the ${limit} MB this host allows, so it was not sent. Running BookForge locally raises the limit to 50 MB.`
+            ? `${size} MB is over the ${limit} MB this host allows, so it was not sent. Save it as .docx and it will be converted here in your browser at any size, or run BookForge locally for a 50 MB limit.`
             : `${size} MB is over the ${limit} MB upload limit, so this one was not sent. Split it, or remove embedded images.`,
         });
         continue;
@@ -305,6 +318,7 @@ export default function ConverterPanel() {
           targetFormat,
           targetFormat === 'epub' ? epubDetails : null,
           (percent) => updateProgress(i, { percent }),
+          extractedHtml,
         );
         const downloadUrl = URL.createObjectURL(blob);
         objectUrlsRef.current.push(downloadUrl);
@@ -340,7 +354,12 @@ export default function ConverterPanel() {
         void (async () => {
           try {
             const form = new FormData();
-            form.append('file', f);
+            if (extractedHtml) {
+              form.append('sourceHtml', extractedHtml);
+              form.append('sourceName', f.name);
+            } else {
+              form.append('file', f);
+            }
             const response = await fetch('/api/book/audit', { method: 'POST', body: form });
             if (!response.ok) return;
             const report = await response.json();

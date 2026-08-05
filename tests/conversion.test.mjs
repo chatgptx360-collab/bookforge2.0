@@ -937,3 +937,40 @@ test('revising nothing leaves the manuscript byte-identical', async () => {
   assert.deepEqual(planRevision(clean), [], 'clean prose must not be targeted');
   assert.equal(applyRevisions(clean, new Map()).text, clean.split(/\n{2,}/).map((p) => p.trim()).join('\n\n'));
 });
+
+test('unwrapping a DOCX in the browser gives the server exactly what a file would', async () => {
+  const { blocksToPlainText, extractBlocksFromFile, htmlToBlocks } = require('../server-build/server.cjs');
+  const { Document, Packer, Paragraph, HeadingLevel } = await import('docx');
+  const mammoth = await import('mammoth');
+
+  const lines = [
+    'Chapter 1: Low Water',
+    'The tide had gone out further than Marin remembered, exposing ribs of black rock.',
+    '"You came back," her mother said, not turning from the window.',
+    'Chapter 2: The Keeper',
+    'Salt had eaten the hinges to lace.',
+  ];
+  const document = new Document({
+    sections: [
+      {
+        children: lines.map((line) =>
+          /^Chapter /.test(line)
+            ? new Paragraph({ text: line, heading: HeadingLevel.HEADING_1 })
+            : new Paragraph(line),
+        ),
+      },
+    ],
+  });
+  const buffer = await Packer.toBuffer(document);
+
+  // What the server does when it is handed the file.
+  const fromFile = await extractBlocksFromFile(buffer, 'novel.docx');
+  // What it does with markup the browser extracted instead. Same library, so
+  // the two must not be able to drift apart — if they ever do, a conversion
+  // silently changes depending on the size of the upload.
+  const { value } = await mammoth.convertToHtml({ buffer });
+  const fromBrowser = htmlToBlocks(value);
+
+  assert.deepEqual(fromBrowser, fromFile);
+  assert.match(blocksToPlainText(fromBrowser), /ribs of black rock/);
+});

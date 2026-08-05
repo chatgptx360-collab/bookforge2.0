@@ -65,7 +65,10 @@ app.use(express.json({ limit: '50mb' }));
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_UPLOAD_BYTES },
+  // fieldSize matters as much as fileSize here: the browser unwraps DOCX and
+  // posts the extracted markup as a form field, and multer's default cap for
+  // one field is 1 MB — a long novel is more than that.
+  limits: { fileSize: MAX_UPLOAD_BYTES, fieldSize: MAX_UPLOAD_BYTES },
 });
 
 // ---------------------------------------------------------------------------
@@ -2123,6 +2126,33 @@ function requireFile(req: Request, res: Response): Express.Multer.File | null {
   return req.file;
 }
 
+/**
+ * Markup the browser already extracted, when it sent any.
+ *
+ * A DOCX is mostly packaging. Twenty-five megabytes of file is usually a few
+ * hundred kilobytes of words wrapped in images and XML, and hosts reject a
+ * large request body before any of this code runs — Vercel at about 4.5 MB,
+ * which no setting here can raise. So the client unwraps DOCX itself and posts
+ * the HTML that mammoth would have produced on this side anyway. Same library,
+ * same markup, same blocks; the only difference is which machine ran it, and
+ * the body that arrives is small enough to arrive at all.
+ *
+ * Only DOCX is accepted this way. The other formats either need a parser too
+ * heavy to ship to a browser or are already plain text, where unwrapping saves
+ * nothing.
+ */
+function preExtracted(req: Request): { blocks: RichBlock[]; name: string } | null {
+  const html = typeof req.body?.sourceHtml === 'string' ? req.body.sourceHtml : '';
+  const raw = typeof req.body?.sourceName === 'string' ? req.body.sourceName : '';
+  if (!html.trim() || !raw.trim()) return null;
+
+  // The name reaches a Content-Disposition header and the output file name, so
+  // only the last path segment is kept.
+  const name = path.basename(raw.trim());
+  if (formatFromName(name) !== 'docx') return null;
+  return { blocks: htmlToBlocks(html), name };
+}
+
 function baseNameOf(fileName: string): string {
   return path.basename(fileName, path.extname(fileName));
 }
@@ -2214,10 +2244,19 @@ app.use(
 // cost.
 // ---------------------------------------------------------------------------
 
+/** The manuscript a request carries, whether as text, browser-extracted markup or a file. */
+async function requestText(req: Request): Promise<string | null> {
+  const inline = typeof req.body?.text === 'string' ? req.body.text : '';
+  if (inline.trim()) return inline;
+  const pre = preExtracted(req);
+  if (pre) return blocksToPlainText(pre.blocks);
+  if (req.file) return extractTextFromFile(req.file.buffer, req.file.originalname);
+  return null;
+}
+
 app.post('/api/book/audit', upload.single('file'), async (req, res) => {
   try {
-    const inline = typeof req.body?.text === 'string' ? req.body.text : null;
-    const text = inline ?? (req.file ? await extractTextFromFile(req.file.buffer, req.file.originalname) : null);
+    const text = await requestText(req);
     if (!text || !text.trim()) {
       res.status(400).json({ error: 'Send a file or a "text" field to audit.' });
       return;
@@ -2231,8 +2270,7 @@ app.post('/api/book/audit', upload.single('file'), async (req, res) => {
 /** Applies only the fixes that delete exact repetition; prose is never rewritten. */
 app.post('/api/book/fix', upload.single('file'), async (req, res) => {
   try {
-    const inline = typeof req.body?.text === 'string' ? req.body.text : null;
-    const text = inline ?? (req.file ? await extractTextFromFile(req.file.buffer, req.file.originalname) : null);
+    const text = await requestText(req);
     if (!text || !text.trim()) {
       res.status(400).json({ error: 'Send a file or a "text" field to fix.' });
       return;
@@ -2339,10 +2377,14 @@ app.get('/api/health', (_req, res) => {
 // ---------------------------------------------------------------------------
 
 app.post('/api/book/parse-file', upload.single('file'), async (req, res) => {
-  const file = requireFile(req, res);
-  if (!file) return;
+  const pre = preExtracted(req);
+  const file = pre ? null : requireFile(req, res);
+  if (!pre && !file) return;
+  const sourceName = pre?.name ?? file!.originalname;
   try {
-    const text = await extractTextFromFile(file.buffer, file.originalname);
+    const text = pre
+      ? blocksToPlainText(pre.blocks)
+      : await extractTextFromFile(file!.buffer, sourceName);
     if (!text.trim()) {
       res.status(422).json({ error: 'No extractable text was found in this file.' });
       return;
@@ -2350,8 +2392,8 @@ app.post('/api/book/parse-file', upload.single('file'), async (req, res) => {
     const structure = parseDocumentStructure(text);
     res.json({
       ...structure,
-      title: structure.title || baseNameOf(file.originalname),
-      sourceFormat: formatFromName(file.originalname),
+      title: structure.title || baseNameOf(sourceName),
+      sourceFormat: formatFromName(sourceName),
       wordCount: text.split(/\s+/).filter(Boolean).length,
     });
   } catch (error) {
@@ -2366,11 +2408,13 @@ const convertUpload = upload.fields([
 
 app.post('/api/book/convert', convertUpload, async (req, res) => {
   const uploaded = req.files as Record<string, Express.Multer.File[]> | undefined;
+  const pre = preExtracted(req);
   const file = req.file ?? uploaded?.file?.[0];
-  if (!file) {
+  if (!pre && !file) {
     res.status(400).json({ error: 'No file was uploaded. Attach a file under the "file" field.' });
     return;
   }
+  const sourceName = pre?.name ?? file!.originalname;
   const coverFile = uploaded?.coverImage?.[0];
 
   const targetFormat = String(req.body?.targetFormat ?? '').toLowerCase();
@@ -2378,9 +2422,9 @@ app.post('/api/book/convert', convertUpload, async (req, res) => {
     res.status(400).json({ error: `Unsupported target format "${targetFormat}". Use docx, pdf, epub, txt or rtf.` });
     return;
   }
-  const sourceFormat = formatFromName(file.originalname);
+  const sourceFormat = formatFromName(sourceName);
   if (!sourceFormat) {
-    res.status(400).json({ error: `Unsupported source file type: ${path.extname(file.originalname)}` });
+    res.status(400).json({ error: `Unsupported source file type: ${path.extname(sourceName)}` });
     return;
   }
   if (sourceFormat === targetFormat) {
@@ -2391,16 +2435,16 @@ app.post('/api/book/convert', convertUpload, async (req, res) => {
   try {
     // Conversion runs on the styled block model, so bold, italics and heading
     // levels from a DOCX or EPUB survive into whatever comes out.
-    const blocks = await extractBlocksFromFile(file.buffer, file.originalname);
+    const blocks = pre ? pre.blocks : await extractBlocksFromFile(file!.buffer, sourceName);
     const text = blocksToPlainText(blocks);
     if (!text.trim()) {
       res.status(422).json({ error: 'No extractable text was found in this file.' });
       return;
     }
 
-    const title = deriveTitle(text, file.originalname);
+    const title = deriveTitle(text, sourceName);
     const author = String(req.body?.author ?? '').trim() || 'BookForge';
-    const fileName = `${baseNameOf(file.originalname)}.${targetFormat}`;
+    const fileName = `${baseNameOf(sourceName)}.${targetFormat}`;
 
     switch (targetFormat) {
       case 'docx':
