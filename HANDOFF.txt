@@ -55,13 +55,18 @@ Deploys to Vercel as one serverless function at /api
   src/utils/gpu.ts           Hardware-vs-software adapter detection
   src/utils/sessionStore.ts  IndexedDB autosave for both speech views
   src/utils/readerStore.ts   Per-book position, bookmarks, highlights
-  tests/conversion.test.mjs  41 tests, node --test, runs against the built CJS
+  tests/conversion.test.mjs  45 unit tests, node --test, against the built CJS
+  tests/harness.mjs          Shared Playwright harness (server, stubs, fixtures)
+  tests/*.browser.mjs        15 browser tests: audiobook, check, converter
+  tests/run-browser.mjs      Runs the browser suites one file at a time
 
 Scripts:
   npm run dev     tsx server.ts  (Vite in middleware mode; use this)
   npm run build   vite build + esbuild the server
   npm start       serve the built client + API
-  npm test        build:server then node --test  (41 tests)
+  npm test        build:server then node --test  (45 unit tests)
+  npm run test:browser  the three Playwright suites, serialised (15 tests)
+  npm run test:all      both of the above
   npm run lint    tsc --noEmit
 
 
@@ -81,6 +86,7 @@ Scripts:
   POST /api/tts/speak           raw PCM; 429 carries quotaScope + retryAfterSeconds
   POST /api/book/audit          quality findings
   POST /api/book/fix            text with exact repetition removed
+  POST /api/book/revise         AI rewrite of flagged passages (needs a key)
 
 
 -------------------------------------------------------------------------------
@@ -138,6 +144,14 @@ MANUSCRIPT CHECK
     from the original, in order. Prose is never rewritten.
   - No score is shown, deliberately: it would measure different things from the
     store's, and a green number followed by a rejection is worse than none.
+  - "Revise prose" is the separate, second button, and the only path that
+    changes wording. It sends each judgment-call passage to the model one at a
+    time and checks every reply before accepting it: a rewrite that is empty,
+    byte-identical, an apology, a note about the request, or outside
+    0.55x-1.9x the original length is refused and the original kept. Nothing
+    is applied until the author accepts it, and the button says plainly that
+    it rewrites their words. Needs GEMINI_API_KEY; the mechanical fix does
+    not.
 
 
 -------------------------------------------------------------------------------
@@ -145,12 +159,14 @@ MANUSCRIPT CHECK
 -------------------------------------------------------------------------------
 
 VERIFIED
-  - 41 unit tests pass (npm test). tsc --noEmit clean. Build clean.
+  - 45 unit tests and 15 browser tests pass (npm run test:all). tsc --noEmit
+    clean. Build clean.
   - EPUB validity against real EPUBCheck 5.2.1.
-  - Every browser-testable behaviour was driven with Playwright at the time its
-    commit was made: conversion, reader, audiobook run/stop/redo/skip, autosave
-    across a hard refresh, quota handling, engine switching, the audit and its
-    fix, cross-origin isolation, upload rejection.
+  - The committed Playwright suites cover: a full narration run, autosave
+    across a hard refresh, section skipping, redo, stop-is-not-failure,
+    the audit, the mechanical fix, the prose revision and its guard,
+    upload rejection, the advertised limit matching the enforced one,
+    EPUB validity end to end, and cross-origin isolation on every view.
 
 NOT VERIFIED — IMPORTANT
   - KOKORO HAS NEVER PRODUCED AUDIO IN A TEST. huggingface.co is unreachable
@@ -163,45 +179,33 @@ NOT VERIFIED — IMPORTANT
   - Long-run memory is untested. A 10-hour audiobook is roughly 1.7 GB of WAV
     held in the browser plus a copy in IndexedDB. It may be fine; nobody knows.
 
-LOST
-  - The Playwright suites lived in a temp directory that was wiped when the
-    build container rolled back. They are gone. Each passed when its commit was
-    made and the code is byte-identical to that state, but they cannot be
-    re-run. Rebuilding them under tests/ is the single highest-value piece of
-    remaining work.
-
-
 -------------------------------------------------------------------------------
 6. WHAT IS LEFT
 -------------------------------------------------------------------------------
 
 HIGH VALUE
-  1. Rebuild the browser test suites under tests/ as real, committed files
-     (Playwright). Cover at minimum: a full audiobook run with a mocked
-     /api/tts/speak, autosave across a refresh, section skipping, redo, the
-     audit + fix round trip, and the upload-size rejection. Mocks MUST return
-     audio proportionate to the text — a fixed short tone now correctly trips
-     the completeness guard, which is exactly what it is for.
-  2. Confirm Kokoro actually speaks, then confirm a 20-chapter book completes.
+  1. Confirm Kokoro actually speaks, then confirm a 20-chapter book completes.
      Watch memory. If it fails, the fix is probably to drop each chapter's PCM
      after writing its Blob, rather than holding everything.
-  3. Client-side conversion for DOCX. mammoth has a browser build. This would
+  2. Client-side conversion for DOCX. mammoth has a browser build. This would
      remove the upload limit entirely, which is the single biggest practical
-     constraint on the deployed app (see item 7 below).
+     constraint on the deployed app (see KNOWN LIMITS below).
 
 WORTH DOING
-  4. A light theme for the app shell. The reader has four themes; everything
+  3. A light theme for the app shell. The reader has four themes; everything
      else is dark-only.
-  5. Create a main branch so work can go through pull requests. Right now the
+  4. Create a main branch so work can go through pull requests. Right now the
      feature branch IS the default branch.
-  6. One stitched audiobook file (single MP3 with chapter markers) alongside
+  5. One stitched audiobook file (single MP3 with chapter markers) alongside
      the per-chapter ZIP.
-  7. Chapter-range narration by number, not just checkboxes, for very long books.
+  6. Chapter-range narration by number, not just checkboxes, for very long books.
 
 KNOWN LIMITS, NOT BUGS
   - Vercel rejects request bodies over ~4.5 MB at the edge. The server caps at
-    4 MB when VERCEL is set, 25 MB locally, MAX_UPLOAD_MB overrides either.
-    Running locally is the current answer for large files.
+    4 MB when VERCEL is set and 50 MB otherwise; MAX_UPLOAD_MB overrides
+    either. /api/health reports the real limit and the UI reads it from there,
+    so the number a user is shown is always the number enforced. Running
+    locally is the current answer for large files.
   - Vercel functions are killed at 60s. Long conversions need localhost.
   - Rate-limit state is per serverless instance, so limits are approximate.
   - PDF output cannot represent non-Latin scripts.
@@ -263,7 +267,7 @@ KNOWN LIMITS, NOT BUGS
   audit all work with no key. Add GEMINI_API_KEY only for hosted speech and the
   reader's lookup.
 
-  Before any commit:  npm run lint && npm test && npm run build
+  Before any commit:  npm run lint && npm run test:all && npm run build
 
   Conventions worth keeping:
     - Comments explain WHY, not what. Several in this codebase record a
