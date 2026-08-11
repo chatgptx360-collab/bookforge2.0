@@ -89,7 +89,7 @@ test('a skipped section is never sent', async () => {
 
     assert.ok(!spoken.some((t) => t.includes('.....')), 'the contents list was spoken');
     const progress = (await page.locator('text=/\\d+\\/\\d+ sections/').first().innerText()).trim();
-    assert.match(progress, /^(\d+)\/\1 sections/, progress);
+    assert.match(progress, /^(\d+)\/\1 sections/, `${progress} — ${page.narrationError ?? 'no error shown'}`);
     assert.ok(progress.startsWith(`${states.length - 1}/`), `count should exclude the skipped section: ${progress}`);
   });
 });

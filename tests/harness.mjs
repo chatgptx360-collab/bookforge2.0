@@ -192,6 +192,13 @@ export async function narrationSettles(page, timeout = 120_000) {
   );
   // The counter commits a frame after the run ends.
   await page.locator('text=/\\d+\\/\\d+ sections/').first().waitFor({ timeout: 30_000 });
+
+  // A run can finish having failed some chapters, and the counter alone does
+  // not say why. This happened once under load and cost a re-run to diagnose,
+  // so whatever the page said is kept for the assertion message.
+  const body = await page.locator('body').innerText();
+  page.narrationError =
+    body.match(/[^\n]*(the run (?:continues|stopped here)|failed|could not)[^\n]*/i)?.[0]?.trim() ?? null;
 }
 
 export function manuscript(chapters = 4) {

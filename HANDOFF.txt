@@ -8,8 +8,9 @@ the traps that cost time during the build.
 Repository : github.com/chatgptx360-collab/bookforge2.0
 Branch     : claude/bookforge-web-app-tf85x4   (this IS the default branch;
              there is no main, so no PR was ever opened)
-Head       : e35342e  "Reject an oversized upload before sending it, not after"
-Commits    : 29
+Head       : 8b6f22f  "Convert a whole twenty-chapter book, and fix what that
+             turned up"
+Commits    : 38
 Deployed   : https://bookforge2-0.vercel.app/
 
 
@@ -38,8 +39,8 @@ React 19 + TypeScript (strict, noUnusedLocals) + Vite 6 + Tailwind v4
 Express 4, bundled by esbuild to server-build/server.cjs
 Deploys to Vercel as one serverless function at /api
 
-  server.ts                  2931 lines. Every API route + all conversion logic.
-  audit.ts                    375 lines. Manuscript quality checker (pure).
+  server.ts                  3059 lines. Every API route + all conversion logic.
+  audit.ts                    504 lines. Manuscript quality checker (pure).
   api/index.mjs              Vercel entry. Installs DOMMatrix/ImageData/Path2D
                              shims BEFORE importing the bundle — pdf-lib and
                              pdf-parse probe for them at import time.
@@ -56,9 +57,11 @@ Deploys to Vercel as one serverless function at /api
   src/utils/sessionStore.ts  IndexedDB autosave for both speech views
   src/utils/readerStore.ts   Per-book position, bookmarks, highlights
   src/utils/docx.ts          Browser-side DOCX unwrapping, so size stops mattering
-  tests/conversion.test.mjs  45 unit tests, node --test, against the built CJS
+  src/mammoth-browser.d.ts   Types for mammoth's browser bundle (it ships none)
+  tests/conversion.test.mjs  47 unit tests, node --test, against the built CJS
   tests/harness.mjs          Shared Playwright harness (server, stubs, fixtures)
-  tests/*.browser.mjs        17 browser tests: audiobook, check, converter
+  tests/*.browser.mjs        17 browser tests: audiobook (5), check (5),
+                             converter (7)
   tests/kokoro.browser.mjs   Opt-in: the real model, and what it actually says
   tests/run-browser.mjs      Runs the browser suites one file at a time
 
@@ -109,7 +112,20 @@ CONVERSION
     wrapped lines rejoined into paragraphs).
   - PDF output maps typographic characters to WinAnsi; non-Latin scripts are
     NOT preserved in PDF (pdf-lib standard fonts only). Use DOCX or EPUB.
-  - Front matter is deduplicated. See section 6, item 1.
+  - Front matter is deduplicated: the title, a typed contents list and repeated
+    chapter headings are stripped before the EPUB is written, and front matter
+    without a heading becomes a "synthetic" chapter with no <h1>. This is what
+    took a real manuscript from 38/100 to 88/100 on a store's check.
+  - deriveTitle() will not use a first line that reads as a chapter heading or
+    a named section. A manuscript opening straight on "Chapter 1: ..." has no
+    title line, and taking the heading anyway printed it on the title page and
+    again above chapter one — the duplication a store counts first. The file
+    name is used instead.
+  - DOCX never touches the upload limit. The browser runs mammoth itself and
+    posts the markup as sourceHtml (src/utils/docx.ts); the server runs the
+    same library over the same markup, so the result is identical. A unit test
+    asserts the two paths produce deep-equal blocks. /api/book/convert,
+    /parse-file, /audit and /fix all accept sourceHtml + sourceName.
 
 READER
   - CSS multi-column pagination inside a clipping box sized to exactly one
@@ -271,6 +287,35 @@ KNOWN LIMITS, NOT BUGS
 
   * IndexedDB transactions auto-close if you await inside them. Do the get and
     the put in separate transactions.
+
+  * Mammoth inlines every image as a base64 data URI unless told otherwise. A
+    20 MB illustrated DOCX became 27 MB of HTML — bigger than the file it was
+    replacing — and the request was refused. src/utils/docx.ts passes a
+    convertImage that discards them. The server drops images anyway, so nothing
+    is lost; remove that option and large books stop converting.
+
+  * Playwright's setInputFiles with a large Buffer does not arrive: 20 MB as
+    base64 over the debug protocol silently fails and the page never sees a
+    file. Write the fixture to disk and pass the path.
+
+  * The dev server's hot-reload socket throws "WebSocket closed without opened."
+    when a suite tears down its server while a page is still handshaking. The
+    browser reports it as a page error, so asserting on raw page errors turned
+    it into five failures that had nothing to do with the app — every suite
+    passed alone and failed in a batch. tests/harness.mjs filters Vite's
+    transport and nothing else.
+
+  * Killing stray dev servers with `pkill -f "tsx server.ts"` kills the shell
+    running it, because the pattern matches its own command line. Exit code 144
+    with no other explanation is this. Use pgrep to collect PIDs, then kill.
+
+  * KNOWN INTERMITTENT: "a skipped section is never sent" failed once, under
+    load, reporting 1/3 sections instead of 3/3 — two chapters errored during a
+    run that otherwise completed. It then passed four consecutive times alone,
+    and the cause was never established. narrationSettles() now captures
+    whatever error the page displayed and the assertion prints it, so the next
+    occurrence says why instead of only what. If you see it, that message is
+    the thread to pull.
 
 
 -------------------------------------------------------------------------------
