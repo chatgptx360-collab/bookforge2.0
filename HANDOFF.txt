@@ -8,9 +8,8 @@ the traps that cost time during the build.
 Repository : github.com/chatgptx360-collab/bookforge2.0
 Branch     : claude/bookforge-web-app-tf85x4   (this IS the default branch;
              there is no main, so no PR was ever opened)
-Head       : 8b6f22f  "Convert a whole twenty-chapter book, and fix what that
-             turned up"
-Commits    : 38
+Head       : 57d1302  "Ignore the generated reader source dump"
+Commits    : 40
 Deployed   : https://bookforge2-0.vercel.app/
 
 
