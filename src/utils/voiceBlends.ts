@@ -1,37 +1,43 @@
 /**
- * Three voices Kokoro does not ship.
+ * Two voices Kokoro does not ship.
  *
  * A voice in Kokoro is not a model — it is a 510x256 block of floats that
  * conditions the decoder. Averaging two of those blocks gives a working third
  * voice, and the weights are not confined to [0,1]: pushing past a source
  * (1.7 of one, -0.7 of another) extrapolates beyond it. That matters here,
  * because the whole English catalogue tops out at 212 Hz and two of the three
- * voices asked for sit above it, at 240 and 259 Hz. Interpolation alone could
- * never have reached them.
+ * voices asked for sits above it, at 240 Hz. Interpolation alone could never
+ * have reached it.
  *
  * Every recipe below was tuned by generating a sample and measuring its median
  * pitch, not by taste:
  *
- *   target 259.4 Hz -> 259.5    target 143.2 Hz -> 142.0    target 239.7 Hz -> 242.4
+ *   target 239.7 Hz -> 243.7        target 143.2 Hz -> 142.9
+ *
+ * Pitch is not the whole story, and a third voice was cut for it. It targeted
+ * 259 Hz and hit it, but bought the height by pushing 0.7 past its strongest
+ * ingredient and sounded wrong for it — measurably so, with the weakest
+ * periodicity and worst jitter of anything tried. A gentler recipe against a
+ * lower partner scored better on both, and still did not convince, so it went
+ * rather than shipping a voice nobody would pick. Lift is roughly weight x the
+ * gap between the two ingredients, which is the lever if it is ever revisited.
  *
  * The awkward part: kokoro-js freezes its voice catalogue, so a genuinely new
  * id cannot be registered, and the one method that skips validation needs
  * phonemes the library will not expose. So each new voice takes over the id of
- * an existing one — the three weakest in the catalogue, none of which is used
- * as an ingredient. Asking for `am_santa` now returns the blend, which is
- * surprising enough to be worth saying out loud here and in the catalogue.
+ * an existing one — the weakest in the catalogue, neither used as an
+ * ingredient. Asking for `af_river` now returns a blend, which is surprising
+ * enough to be worth saying out loud here and in the catalogue.
  *
  * The accent comes from the id's first letter, not from the blend: kokoro-js
- * feeds `a` to the American phonemiser and `b` to the British one. All three
- * recipes were measured through an `a` id, so all three occupy `a` ids.
+ * feeds `a` to the American phonemiser and `b` to the British one. Both
+ * recipes were measured through an `a` id, so both occupy `a` ids.
  */
 
 /** [ingredient voice id, weight]. Weights may be negative, and need not sum to 1. */
 export type Recipe = ReadonlyArray<readonly [string, number]>;
 
 export const VOICE_BLENDS: Readonly<Record<string, Recipe>> = {
-  // Bright, high, relentless — the short-form female read.
-  am_santa: [['bf_alice', 1.7], ['af_alloy', -0.7]],
   // Low and full, the male storytime read.
   af_river: [['am_fenrir', 0.6], ['am_eric', 0.4]],
   // High but less pressed, with room to breathe.

@@ -98,9 +98,9 @@ export const KOKORO_VOICES: TtsVoice[] = [
   { id: 'bm_daniel', grade: 'D', name: 'Daniel', character: 'Measured', timbre: 'clear', gender: 'male',
     goodFor: 'Calm and deliberate (British)',
     bestFor: ['Academic texts', 'Reference books', 'Long audiobooks'] },
-  { id: 'am_santa', grade: 'C', name: 'Remi', character: 'Urgent', timbre: 'bright', gender: 'female',
-    goodFor: 'The highest voice here — bright and driving (American)',
-    bestFor: ['Short-form video', 'Reaction stories', 'Hooks'] },
+  { id: 'am_santa', grade: 'D-', name: 'Santa', character: 'Jolly', timbre: 'deep', gender: 'male',
+    goodFor: 'Older, twinkling storyteller (American)',
+    bestFor: ["Children's books", 'Family audio', 'Character voice'] },
 
   { id: 'am_adam', grade: 'F+', name: 'Adam', character: 'Plain', timbre: 'clear', gender: 'male',
     goodFor: 'Straightforward reading (American)',
