@@ -14,6 +14,7 @@
  */
 
 import { inspectGpu } from './gpu';
+import { installVoiceBlends } from './voiceBlends';
 
 export type WorkerRequest =
   | { id: number; type: 'load' }
@@ -45,6 +46,10 @@ function load(id: number): Promise<KokoroModel> {
   if (loading) return loading;
 
   loading = (async () => {
+    // Must be in place before kokoro-js asks for any voice: three of the
+    // catalogue's ids resolve to blends built here rather than to a download.
+    installVoiceBlends(self as unknown as { fetch: typeof fetch });
+
     const { KokoroTTS } = await import('kokoro-js');
     const { env } = await import('@huggingface/transformers');
 

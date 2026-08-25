@@ -992,3 +992,33 @@ test('a book that opens on chapter one does not take that heading as its title',
   // A real title line is still used.
   assert.equal(deriveTitle('The Lamp Keeper\n\nChapter 1: Low Water', 'x.docx'), 'The Lamp Keeper');
 });
+
+test('a blended voice is the weighted sum of its ingredients', async () => {
+  const { combine } = await import('../src/utils/voiceBlends.ts');
+
+  // Extrapolation is the point: 1.7 of one voice minus 0.7 of another lands
+  // above both, which is the only way to reach a pitch no stock voice has.
+  const a = Float32Array.from([1, 2, 3]);
+  const b = Float32Array.from([1, 1, 1]);
+  assert.deepEqual(
+    Array.from(combine([a, b], [['a', 1.7], ['b', -0.7]])),
+    [1.7 * 1 - 0.7, 1.7 * 2 - 0.7, 1.7 * 3 - 0.7].map((v) => Math.fround(v)),
+  );
+
+  assert.throws(() => combine([a], [['a', 1], ['b', 1]]), /Wrong number/);
+  assert.throws(() => combine([a, Float32Array.from([1])], [['a', 1], ['b', 1]]), /same shape/);
+});
+
+test('no blended voice is built out of another blended voice', async () => {
+  const { VOICE_BLENDS } = await import('../src/utils/voiceBlends.ts');
+  const shadowed = Object.keys(VOICE_BLENDS);
+
+  for (const [id, recipe] of Object.entries(VOICE_BLENDS)) {
+    for (const [ingredient] of recipe) {
+      // An ingredient that is itself blended would ask the interceptor to
+      // build a voice while it is already building one.
+      assert.ok(!shadowed.includes(ingredient), `${id} is built from ${ingredient}, which is also blended`);
+    }
+  }
+  assert.equal(new Set(shadowed).size, shadowed.length, 'two blends claim the same id');
+});
