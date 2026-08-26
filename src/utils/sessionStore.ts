@@ -43,6 +43,8 @@ export interface SpeechSession {
   engine?: 'kokoro' | 'gemini';
   voice: string;
   style: string;
+  /** Local-engine tempo; absent on sessions saved before it existed. */
+  speed?: number;
   audio?: { pcm: Int16Array; sampleRate: number };
   savedAt: number;
 }

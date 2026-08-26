@@ -15,8 +15,8 @@ structured sections, read it in a typeset reader, and turn it into an audiobook.
 - **Audiobook Studio** (`/audiobook`) — upload a manuscript, choose a narrator,
   and it is read chapter by chapter into downloadable WAV or MP3. See **Speech**
   below.
-- **TTS Studio** (`/speech`) — paste any passage, choose a narrator and a
-  delivery, and get audio back as WAV or MP3.
+- **TTS Studio** (`/speech`) — paste any passage, choose a narrator, set the
+  pace, and get audio back as WAV or MP3.
 - **Reader** — a full e-reader, not a scroll view: paginated spreads (two pages on
   wide screens, one on mobile), four themes, four typefaces, size/spacing/margin
   controls, table of contents with per-chapter time estimates, in-book search,

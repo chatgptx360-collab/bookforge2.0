@@ -142,6 +142,14 @@ SPEECH (two engines, switchable, choice persists in localStorage)
   - Gemini: hosted, accepts a delivery instruction, needs a key, metered.
   - Kokoro cannot be directed, so the Delivery box is HIDDEN when it is
     selected rather than left there ignoring input.
+  - Kokoro alone has a Pace slider (0.5x-2x), shown for the same reason in
+    reverse: the hosted engine has no tempo control. It scales the duration
+    the model predicts per phoneme, so speech gets quicker without the pitch
+    rising, which resampling would do. The "of audio" estimate divides by it,
+    or it would sit there contradicting the slider. Saved with the session.
+  - Pace shortens the pauses along with the words, so it does not reproduce
+    the wall-to-wall density of short-form narration, where the silences were
+    cut in editing. That would be a trim-pauses pass on the finished audio.
   - Both resolve to raw PCM; the client stitches, writes WAV, encodes MP3
     lazily with lamejs.
 

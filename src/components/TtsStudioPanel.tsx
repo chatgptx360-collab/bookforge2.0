@@ -36,6 +36,7 @@ export default function TtsStudioPanel() {
   const [text, setText] = useState('');
   const [voice, setVoice] = useState(() => (loadEngine() === 'kokoro' ? KOKORO_DEFAULT_VOICE : 'Sulafat'));
   const [style, setStyle] = useState('');
+  const [speed, setSpeed] = useState(1);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [audio, setAudio] = useState<{ pcm: Int16Array; sampleRate: number; url: string } | null>(null);
@@ -65,6 +66,7 @@ export default function TtsStudioPanel() {
       storeEngine(savedEngine);
       setVoice(voiceForEngine(savedEngine, saved.voice));
       setStyle(saved.style);
+      setSpeed(saved.speed ?? 1);
       if (saved.audio) {
         const pcm = new Int16Array(saved.audio.pcm);
         setAudio({ pcm, sampleRate: saved.audio.sampleRate, url: URL.createObjectURL(encodeWav(pcm, saved.audio.sampleRate)) });
@@ -86,12 +88,13 @@ export default function TtsStudioPanel() {
         engine,
         voice,
         style,
+        speed,
         audio: audio ? { pcm: audio.pcm, sampleRate: audio.sampleRate } : undefined,
         savedAt: stamp,
       }).then(() => setSavedAt(stamp));
     }, 800);
     return () => clearTimeout(timer);
-  }, [restoring, text, voice, style, engine, audio]);
+  }, [restoring, text, voice, style, speed, engine, audio]);
 
   // The picker is engine-agnostic; only the catalogue behind it changes.
   const activeCatalogue =
@@ -118,7 +121,10 @@ export default function TtsStudioPanel() {
           : ` No graphics acceleration here, so this runs${threadNote}.`;
 
   const characters = text.length;
-  const estimatedSeconds = Math.round(characters / 14);
+  // Roughly fourteen characters a second at the voice's own pace; speeding it
+  // up shortens the clip in proportion, so the estimate has to follow or it
+  // quietly contradicts the slider sitting next to it.
+  const estimatedSeconds = Math.round(characters / 14 / (engine === 'kokoro' ? speed : 1));
 
   const generate = async () => {
     if (!text.trim()) return;
@@ -145,6 +151,7 @@ export default function TtsStudioPanel() {
             voice,
             style,
             engine,
+            speed,
             onModelProgress: (fraction) =>
               setBusy(`Downloading the local voice model — ${Math.round(fraction * 100)}%`),
             shouldContinue: () => !cancelRef.current,
@@ -261,6 +268,35 @@ export default function TtsStudioPanel() {
               ≈ {formatDuration(estimatedSeconds)} of audio
             </span>
           </div>
+
+          {/* The hosted engine has no tempo control, so the slider appears only
+              for the one that does — the mirror of Delivery below. */}
+          {engine === 'kokoro' && (
+            <label className="block">
+              <span className="text-[10px] uppercase font-mono font-bold text-[#71717A] tracking-wider flex items-center justify-between mb-1.5">
+                <span>Pace</span>
+                <span className="text-[#D4AF37] font-bold">{speed.toFixed(2)}×</span>
+              </span>
+              <input
+                type="range"
+                min={0.5}
+                max={2}
+                step={0.05}
+                value={speed}
+                aria-label="Speaking pace"
+                onChange={(e) => setSpeed(Number(e.target.value))}
+                className="w-full accent-[#D4AF37] cursor-pointer"
+              />
+              <span className="mt-1 block text-[10px] text-[#52525B]">
+                Tempo only — the voice does not change pitch.{' '}
+                {speed !== 1 && (
+                  <button type="button" onClick={() => setSpeed(1)} className="text-[#D4AF37] underline cursor-pointer">
+                    Reset
+                  </button>
+                )}
+              </span>
+            </label>
+          )}
 
           {/* Kokoro takes a voice and nothing else, so a delivery instruction
               it silently ignores has no place on screen. */}

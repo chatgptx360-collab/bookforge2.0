@@ -217,6 +217,36 @@ test('the speech view offers voices and states which engine will run', async () 
   });
 });
 
+test('pace is offered for the engine that has it, and the estimate follows', async () => {
+  await withBrowser(async (context) => {
+    const page = await openPage(context, { engine: 'kokoro' });
+    await stubSpeech(page);
+    await page.goto(`${server.base}/speech`, { waitUntil: 'networkidle' });
+
+    const pace = page.locator('input[aria-label="Speaking pace"]');
+    await pace.waitFor({ timeout: 20_000 });
+
+    // 280 characters at roughly 14 a second is twenty seconds of audio.
+    await page.locator('textarea').first().fill('a'.repeat(280));
+    await page.waitForTimeout(300);
+    const readEstimate = async () =>
+      (await page.locator('text=/of audio/i').first().innerText()).trim();
+    assert.match(await readEstimate(), /0:20/, `at 1x: ${await readEstimate()}`);
+
+    await pace.fill('2');
+    await page.waitForTimeout(300);
+    // Twice the pace is half the clip; an estimate that ignored the slider
+    // would sit there contradicting it.
+    assert.match(await readEstimate(), /0:10/, `at 2x: ${await readEstimate()}`);
+
+    // The hosted engine has no tempo control, so the slider must not be there.
+    await page.locator('button', { hasText: /Gemini/i }).first().click();
+    await page.waitForTimeout(500);
+    assert.equal(await pace.count(), 0, 'the pace slider is showing for an engine that ignores it');
+    assert.deepEqual(page.pageErrors, []);
+  });
+});
+
 test('every view renders under cross-origin isolation', async () => {
   await withBrowser(async (context) => {
     const page = await openPage(context);

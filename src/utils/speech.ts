@@ -79,6 +79,13 @@ export interface SpeakOptions {
   voice: string;
   style?: string;
   engine?: Engine;
+  /**
+   * Tempo multiplier for the local engine, 1 being the voice's own pace.
+   * Kokoro scales the duration it predicts per phoneme, so the words come
+   * faster without the pitch rising — resampling would do both. The hosted
+   * engine has no equivalent control and ignores this.
+   */
+  speed?: number;
   /** Reports the one-time model download when Kokoro is loading. */
   onModelProgress?: (fraction: number, label: string) => void;
   /** Called while waiting out a quota window, so the wait is visible. */
@@ -109,6 +116,7 @@ export async function speak(text: string, options: SpeakOptions): Promise<Speech
     voice,
     style,
     engine = 'kokoro',
+    speed = 1,
     onModelProgress,
     onThrottled,
     shouldContinue,
@@ -126,7 +134,9 @@ export async function speak(text: string, options: SpeakOptions): Promise<Speech
     if (stopped()) throw new SpeechError('Stopped.', 0);
     const { speakWithKokoro } = await import('./kokoro');
     try {
-      return await speakWithKokoro(text, voice, 1, onModelProgress, shouldContinue);
+      // Far outside this range the model slurs or drawls into nonsense.
+      const tempo = Math.min(2, Math.max(0.5, Number(speed) || 1));
+      return await speakWithKokoro(text, voice, tempo, onModelProgress, shouldContinue);
     } catch (error) {
       const detail = error instanceof Error ? error.message : '';
       // A stop is not a failure, and callers recognise it by this exact
