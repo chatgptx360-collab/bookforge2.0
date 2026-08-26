@@ -17,13 +17,22 @@ Deployed   : https://bookforge2-0.vercel.app/
 1. WHAT THE APP IS
 -------------------------------------------------------------------------------
 
-A manuscript toolkit with five views, all client-routed from one Express app:
+A manuscript toolkit with five views, all client-routed from one Express app.
+Four are reachable; the fifth is paused, not deleted:
 
   /converter   DOCX/PDF/EPUB/TXT/RTF conversion, multi-file, ZIP download
   /reader      A real paginated e-reader plus a section editor
-  /audiobook   Manuscript -> chapter-by-chapter narration -> WAV/MP3
+  /audiobook   PAUSED. Manuscript -> chapter-by-chapter narration -> WAV/MP3
   /speech      Paste text -> speech
   /check       Finds what publishing platforms reject; fixes the mechanical ones
+
+Audiobook Studio is hidden by AUDIOBOOK_PAUSED in src/App.tsx, which drops the
+sidebar entry and the route so the view is unreachable and Vite leaves it out
+of the bundle. Nothing was removed: the panel, its worker plumbing, its
+autosave and its five browser tests are all still here and still type-checked.
+To bring it back, set the flag false and un-skip tests/audiobook.browser.mjs.
+A test in converter.browser.mjs asserts the pause holds — no sidebar entry,
+and /audiobook landing on the converter rather than a blank screen.
 
 The through-line: it must work with no API key. Conversion, the reader, the
 audit and the default speech engine all run without one. Only Gemini speech and

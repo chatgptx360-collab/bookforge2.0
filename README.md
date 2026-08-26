@@ -12,9 +12,11 @@ structured sections, read it in a typeset reader, and turn it into an audiobook.
   page, table of contents and chapters; four editor themes, three typefaces, font
   sizing, split-at-cursor, word/character counts; export to TXT, server DOCX, or a
   KDP-layout DOCX built entirely in the browser.
-- **Audiobook Studio** (`/audiobook`) — upload a manuscript, choose a narrator,
-  and it is read chapter by chapter into downloadable WAV or MP3. See **Speech**
-  below.
+- **Audiobook Studio** (`/audiobook`) — *paused.* Upload a manuscript, choose a
+  narrator, and it is read chapter by chapter into downloadable WAV or MP3. The
+  code is intact and still type-checked; it is hidden from the navigation by
+  `AUDIOBOOK_PAUSED` in `src/App.tsx`. Set that to false to bring it back, and
+  un-skip `tests/audiobook.browser.mjs` with it.
 - **TTS Studio** (`/speech`) — paste any passage, choose a narrator, set the
   pace, and get audio back as WAV or MP3.
 - **Reader** — a full e-reader, not a scroll view: paginated spreads (two pages on

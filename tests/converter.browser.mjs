@@ -247,6 +247,23 @@ test('pace is offered for the engine that has it, and the estimate follows', asy
   });
 });
 
+test('the paused studio is gone from the UI and its URL lands somewhere real', async () => {
+  await withBrowser(async (context) => {
+    const page = await openPage(context);
+    await page.goto(`${server.base}/converter`, { waitUntil: 'networkidle' });
+
+    // Hidden means hidden: no way in from the navigation.
+    const nav = await page.locator('body').innerText();
+    assert.ok(!/Audiobook Studio/i.test(nav), 'the sidebar still offers Audiobook Studio');
+
+    // And an old bookmark must not land on a blank screen.
+    await page.goto(`${server.base}/audiobook`, { waitUntil: 'networkidle' });
+    const landed = await page.locator('body').innerText();
+    assert.match(landed, /Universal Book & File Converter/i, 'a paused URL rendered nothing');
+    assert.deepEqual(page.pageErrors, []);
+  });
+});
+
 test('every view renders under cross-origin isolation', async () => {
   await withBrowser(async (context) => {
     const page = await openPage(context);
@@ -262,7 +279,6 @@ test('every view renders under cross-origin isolation', async () => {
     for (const [path, marker] of [
       ['/converter', /Convert|File Converter/i],
       ['/reader', /Reader/i],
-      ['/audiobook', /Audiobook/i],
       ['/check', /Manuscript Check/i],
     ]) {
       await page.goto(`${server.base}${path}`, { waitUntil: 'networkidle' });

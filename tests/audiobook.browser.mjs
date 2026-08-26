@@ -19,11 +19,20 @@ import {
   withBrowser,
 } from './harness.mjs';
 
+/**
+ * The studio is hidden while it is paused, so /audiobook no longer resolves
+ * and none of this can run. The suite is skipped rather than deleted: it is
+ * the thing that will say whether the studio still works when it comes back.
+ * Flip this together with AUDIOBOOK_PAUSED in src/App.tsx.
+ */
+const PAUSED = 'Audiobook Studio is paused — see AUDIOBOOK_PAUSED in src/App.tsx';
+
 let server;
-before(async () => { server = await startServer(); });
+// Starting a server for tests that will all skip just burns a minute.
+before(async () => { if (!PAUSED) server = await startServer(); });
 after(async () => { await server?.stop(); });
 
-test('a book narrates, survives a refresh, and is not re-generated', async () => {
+test('a book narrates, survives a refresh, and is not re-generated', { skip: PAUSED }, async () => {
   await withBrowser(async (context) => {
     const spoken = [];
     const page = await openPage(context);
@@ -59,7 +68,7 @@ test('a book narrates, survives a refresh, and is not re-generated', async () =>
   });
 });
 
-test('a skipped section is never sent', async () => {
+test('a skipped section is never sent', { skip: PAUSED }, async () => {
   await withBrowser(async (context) => {
     const spoken = [];
     const page = await openPage(context);
@@ -94,7 +103,7 @@ test('a skipped section is never sent', async () => {
   });
 });
 
-test('redo replaces a section rather than re-serving it', async () => {
+test('redo replaces a section rather than re-serving it', { skip: PAUSED }, async () => {
   await withBrowser(async (context) => {
     // A different pitch on the second pass proves the audio is genuinely new;
     // a redo that quietly returned the cached clip would otherwise pass.
@@ -149,7 +158,7 @@ test('redo replaces a section rather than re-serving it', async () => {
   });
 });
 
-test('stopping keeps finished work and is not reported as a failure', async () => {
+test('stopping keeps finished work and is not reported as a failure', { skip: PAUSED }, async () => {
   await withBrowser(async (context) => {
     const page = await openPage(context);
     await stubSpeech(page, { delayMs: 1200 });
@@ -174,7 +183,7 @@ test('stopping keeps finished work and is not reported as a failure', async () =
   });
 });
 
-test('a clean manuscript narrates without a single flagged section', async () => {
+test('a clean manuscript narrates without a single flagged section', { skip: PAUSED }, async () => {
   await withBrowser(async (context) => {
     const page = await openPage(context);
     await stubSpeech(page);

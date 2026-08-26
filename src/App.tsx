@@ -9,11 +9,26 @@ import AuditPanel from './components/AuditPanel';
 
 export type ViewId = 'converter' | 'reader' | 'audiobook' | 'speech' | 'check';
 
+/**
+ * Audiobook Studio is paused, not deleted.
+ *
+ * Nothing about it has been removed — the panel, its worker plumbing, its
+ * autosave and its test suite are all still here and still type-checked. This
+ * flag is the whole of the hiding: it drops the sidebar entry and the route,
+ * so the view is unreachable and Vite leaves it out of the bundle. Set it to
+ * false to bring the studio back, and un-skip tests/audiobook.browser.mjs at
+ * the same time.
+ *
+ * Typed as boolean rather than left to infer `true`, so the disabled branches
+ * do not read as dead code.
+ */
+export const AUDIOBOOK_PAUSED: boolean = true;
+
 const ROUTES: Record<string, ViewId> = {
   '/': 'converter',
   '/converter': 'converter',
   '/reader': 'reader',
-  '/audiobook': 'audiobook',
+  ...(AUDIOBOOK_PAUSED ? {} : { '/audiobook': 'audiobook' as ViewId }),
   '/speech': 'speech',
   '/check': 'check',
 };
@@ -29,9 +44,10 @@ export default function App() {
   const [navOpen, setNavOpen] = useState(false);
 
   useEffect(() => {
-    // Retired views (the old translator and author studio) still live in
-    // people's bookmarks; land them on the converter with a matching URL
-    // rather than leaving a dead path in the address bar.
+    // Retired and paused views (the old translator and author studio, and
+    // Audiobook Studio for now) still live in people's bookmarks; land them on
+    // the converter with a matching URL rather than leaving a dead path in the
+    // address bar.
     if (!(window.location.pathname in ROUTES)) {
       window.history.replaceState({ view: 'converter' }, '', '/converter');
     }
@@ -83,7 +99,7 @@ export default function App() {
 
         {activeView === 'reader' ? (
           <ReaderEditorPanel />
-        ) : activeView === 'audiobook' ? (
+        ) : activeView === 'audiobook' && !AUDIOBOOK_PAUSED ? (
           <AudiobookPanel />
         ) : activeView === 'speech' ? (
           <TtsStudioPanel />

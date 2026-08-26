@@ -1,6 +1,6 @@
 import {
   ShieldCheck, AudioLines, BookOpen, Headphones, RefreshCw, X } from 'lucide-react';
-import type { ViewId } from '../App';
+import { AUDIOBOOK_PAUSED, type ViewId } from '../App';
 
 interface SidebarProps {
   activeView: ViewId;
@@ -53,7 +53,7 @@ export default function Sidebar({ activeView, setActiveView, isOpen = false, onC
         <span className="text-[10px] font-bold font-display tracking-widest text-[#71717A] uppercase px-2">
           Tools
         </span>
-        {NAV_ITEMS.map((item) => {
+        {NAV_ITEMS.filter((item) => !(item.id === 'audiobook' && AUDIOBOOK_PAUSED)).map((item) => {
           const Icon = item.icon;
           const isActive = activeView === item.id;
           return (
