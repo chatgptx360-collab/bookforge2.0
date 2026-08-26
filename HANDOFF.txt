@@ -8,8 +8,8 @@ the traps that cost time during the build.
 Repository : github.com/chatgptx360-collab/bookforge2.0
 Branch     : claude/bookforge-web-app-tf85x4   (this IS the default branch;
              there is no main, so no PR was ever opened)
-Head       : 57d1302  "Ignore the generated reader source dump"
-Commits    : 40
+Head       : d51352e  "Pause Audiobook Studio without deleting it"
+Commits    : 45
 Deployed   : https://bookforge2-0.vercel.app/
 
 
@@ -66,10 +66,11 @@ Deploys to Vercel as one serverless function at /api
   src/utils/readerStore.ts   Per-book position, bookmarks, highlights
   src/utils/docx.ts          Browser-side DOCX unwrapping, so size stops mattering
   src/mammoth-browser.d.ts   Types for mammoth's browser bundle (it ships none)
-  tests/conversion.test.mjs  47 unit tests, node --test, against the built CJS
+  src/utils/voiceBlends.ts   Two voices made by mixing Kokoro's style tensors
+  tests/conversion.test.mjs  49 unit tests, node --test, against the built CJS
   tests/harness.mjs          Shared Playwright harness (server, stubs, fixtures)
-  tests/*.browser.mjs        17 browser tests: audiobook (5), check (5),
-                             converter (7)
+  tests/*.browser.mjs        audiobook (5, skipped while paused), check (5),
+                             converter (9)
   tests/kokoro.browser.mjs   Opt-in: the real model, and what it actually says
   tests/run-browser.mjs      Runs the browser suites one file at a time
 
@@ -77,8 +78,9 @@ Scripts:
   npm run dev     tsx server.ts  (Vite in middleware mode; use this)
   npm run build   vite build + esbuild the server
   npm start       serve the built client + API
-  npm test        build:server then node --test  (47 unit tests)
-  npm run test:browser  the Playwright suites, serialised (17 tests)
+  npm test        build:server then node --test  (49 unit tests)
+  npm run test:browser  the Playwright suites, serialised (14 run, 5 skipped
+                        while Audiobook Studio is paused)
   npm run test:all      both of the above
   npm run test:kokoro   loads the real voice model and checks the audio;
                         opt-in, downloads ~92 MB, takes about a minute
@@ -147,7 +149,11 @@ READER
 SPEECH (two engines, switchable, choice persists in localStorage)
   - Kokoro (default): 82M-param Apache-2.0 model, runs entirely in the browser
     via transformers.js. No key, no quota, no request leaves the machine.
-    28 voices, graded A..F+ from the model card, ordered best-first.
+    28 voices, graded A..F+ from the model card, ordered best-first. Two of
+    them are not Kokoro's: Sadie (244 Hz) and Cole (143 Hz) are blends built
+    in src/utils/voiceBlends.ts, occupying the ids am_echo and af_river
+    because the library's catalogue is frozen. Echo and River are therefore
+    gone, and asking for those ids returns the blends.
   - Gemini: hosted, accepts a delivery instruction, needs a key, metered.
   - Kokoro cannot be directed, so the Delivery box is HIDDEN when it is
     selected rather than left there ignoring input.
@@ -162,7 +168,7 @@ SPEECH (two engines, switchable, choice persists in localStorage)
   - Both resolve to raw PCM; the client stitches, writes WAV, encodes MP3
     lazily with lamejs.
 
-AUDIOBOOK
+AUDIOBOOK  (paused — hidden from the UI, code intact; see section 1)
   - Section checkboxes; a typed table of contents starts unticked.
     Everything/Chapters only/Nothing presets. Excluded sections are never sent.
   - Per-section redo, and retry on a failed one. Replaces audio in place.
@@ -195,8 +201,14 @@ MANUSCRIPT CHECK
 -------------------------------------------------------------------------------
 
 VERIFIED
-  - 47 unit tests and 17 browser tests pass (npm run test:all). tsc --noEmit
-    clean. Build clean.
+  - 49 unit tests and 14 browser tests pass (npm run test:all); 5 more are
+    skipped while Audiobook Studio is paused. tsc --noEmit clean. Build clean.
+  - THE BLENDED VOICES WORK, measured through the real UI rather than in
+    Node: Sadie 243.7 Hz, Cole 142.9 Hz, against targets of 239.7 and 143.2
+    taken from the reference clips.
+  - THE PACE SLIDER REACHES THE MODEL. The same sentence runs 4.92s at 1x and
+    3.30s at 1.5x — a ratio of 1.49 — with pitch 243.7 Hz against 245.0, so it
+    is genuinely tempo and not resampling.
   - EPUB validity against real EPUBCheck 5.2.1.
   - The committed Playwright suites cover: a full narration run, autosave
     across a hard refresh, section skipping, redo, stop-is-not-failure,
@@ -219,9 +231,10 @@ VERIFIED
     holds that ground.
 
 NOT VERIFIED — IMPORTANT
-  - A WHOLE BOOK has not been narrated end to end. One sentence has, and a
-    chapter is only more of the same, but a 20-chapter run has never been
-    watched. See the memory note below.
+  - A WHOLE BOOK has not been narrated end to end. Single passages have, at
+    both engines' hands, and a chapter is only more of the same, but a
+    20-chapter run has never been watched. Moot while the studio is paused;
+    the first thing to do when it comes back. See the memory note below.
   - No Gemini speech call has ever been made either. Same reason (no key in the
     build environment). The 429 handling was tested against mocked responses.
   - Long-run memory is untested. A 10-hour audiobook is roughly 1.7 GB of WAV
@@ -232,22 +245,29 @@ NOT VERIFIED — IMPORTANT
 -------------------------------------------------------------------------------
 
 HIGH VALUE
-  1. Narrate a 20-chapter book and watch memory. If it fails, the fix is
-     probably to drop each chapter's PCM after writing its Blob, rather than
-     holding everything.
-  2. Do for the other input formats what is now done for DOCX: unwrap them in
+  1. Do for the other input formats what is now done for DOCX: unwrap them in
      the browser so their size stops mattering. EPUB is a zip and jszip is
      already a dependency, so it is the next easy one. PDF needs pdf.js, which
      is a much larger download.
+  2. A trim-pauses pass over generated audio, for short-form voiceover. The
+     reference clips this was compared against are 94-96% speech because the
+     silences were cut in editing; Kokoro's pace control shortens the pauses
+     along with the words, so it cannot reproduce that density. Cutting
+     silence from the finished PCM can.
+
+ON HOLD WHILE AUDIOBOOK STUDIO IS PAUSED
+  - Narrate a 20-chapter book and watch memory. If it fails, the fix is
+    probably to drop each chapter's PCM after writing its Blob, rather than
+    holding everything. Still the biggest unknown in the app.
+  - One stitched audiobook file (single MP3 with chapter markers) alongside
+    the per-chapter ZIP.
+  - Chapter-range narration by number, not just checkboxes, for long books.
 
 WORTH DOING
   3. A light theme for the app shell. The reader has four themes; everything
      else is dark-only.
   4. Create a main branch so work can go through pull requests. Right now the
      feature branch IS the default branch.
-  5. One stitched audiobook file (single MP3 with chapter markers) alongside
-     the per-chapter ZIP.
-  6. Chapter-range narration by number, not just checkboxes, for very long books.
 
 KNOWN LIMITS, NOT BUGS
   - Vercel rejects request bodies over ~4.5 MB at the edge. The server caps at
@@ -325,6 +345,25 @@ KNOWN LIMITS, NOT BUGS
     running it, because the pattern matches its own command line. Exit code 144
     with no other explanation is this. Use pgrep to collect PIDs, then kill.
 
+  * kokoro-js freezes its voice catalogue (Object.freeze), so a new voice id
+    cannot be registered — `tts.voices.x = ...` throws "object is not
+    extensible". generate_from_ids() skips the validation but wants phonemes
+    the library does not export, so the way in is to serve a blended tensor
+    for an id that already exists, by patching fetch in the worker. That is
+    why two stock voices had to be given up rather than three added.
+
+  * Do not trust an acoustic speaking-rate metric you have not validated
+    against a known answer. Two were tried here for comparing pace. One barely
+    moved while the audio genuinely sped up by 39%; the other read a 1.25x
+    speed-up as slower than 1x. Generate samples at speeds you set yourself
+    and check the metric recovers them before pointing it at anything real.
+
+  * A voice can measure right and sound wrong. The first attempt at a 259 Hz
+    blend hit its target within 0.1 Hz and was rejected by ear; the second
+    scored better on periodicity and jitter than the voices already accepted
+    and was rejected too. Pitch, clarity and jitter catch a degraded voice,
+    not an unconvincing one. Ship samples and let someone listen.
+
   * KNOWN INTERMITTENT: "a skipped section is never sent" failed once, under
     load, reporting 1/3 sections instead of 3/3 — two chapters errored during a
     run that otherwise completed. It then passed four consecutive times alone,
@@ -360,4 +399,5 @@ KNOWN LIMITS, NOT BUGS
 
   FIRST THING TO DO: run `npm run test:all`, then `npm run test:kokoro`. The
   second one downloads the voice model and proves it still speaks; if that
-  passes, everything in section 6 is standing on solid ground.
+  passes, everything in section 6 is standing on solid ground. Five skipped
+  tests are expected — that is Audiobook Studio being paused, not a failure.
