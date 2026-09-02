@@ -16,3 +16,4 @@ server-build
 # Generated snapshot of the tree; regenerate rather than commit drift.
 SOURCE.txt
 READER-SOURCE.txt
+CONVERTER-SOURCE.txt
