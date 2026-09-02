@@ -658,11 +658,21 @@ test('a software adapter is not mistaken for a graphics card', async () => {
     assert.equal(verdict.reason, 'software');
   }
 
-  // A real card is accepted, including via the older info spelling.
-  const real = await inspectGpu(scope({ requestAdapter: async () => ({ info: { vendor: 'nvidia', architecture: 'ampere' } }) }));
+  // A real card is accepted, including via the older info spelling. Every real
+  // GPUAdapter can be asked for a device, so the fakes have to be able to too —
+  // an adapter without one is not a card, it is an incomplete stub.
+  const device = async () => ({ destroy: () => {} });
+  const real = await inspectGpu(
+    scope({ requestAdapter: async () => ({ info: { vendor: 'nvidia', architecture: 'ampere' }, requestDevice: device }) }),
+  );
   assert.equal(real.usable, true, real.describe);
   const older = await inspectGpu(
-    scope({ requestAdapter: async () => ({ requestAdapterInfo: async () => ({ vendor: 'apple', architecture: 'metal-3' }) }) }),
+    scope({
+      requestAdapter: async () => ({
+        requestAdapterInfo: async () => ({ vendor: 'apple', architecture: 'metal-3' }),
+        requestDevice: device,
+      }),
+    }),
   );
   assert.equal(older.usable, true, older.describe);
 
@@ -1021,4 +1031,70 @@ test('no blended voice is built out of another blended voice', async () => {
     }
   }
   assert.equal(new Set(shadowed).size, shadowed.length, 'two blends claim the same id');
+});
+
+test('a graphics card that will not open is not called usable', async () => {
+  const { inspectGpu } = await import('../src/utils/gpu.ts');
+
+  // What a 2011 card on a 2015 driver actually does: describes itself
+  // perfectly well, then fails the moment a device is asked for.
+  const refuses = {
+    navigator: {
+      gpu: {
+        requestAdapter: async () => ({
+          isFallbackAdapter: false,
+          info: { vendor: 'amd', device: 'Radeon HD 6470M' },
+          requestDevice: async () => {
+            throw new Error("Failed to execute 'requestDevice': DXGI_ERROR_DEVICE_REMOVED (0x887A0005)");
+          },
+        }),
+      },
+    },
+  };
+  const verdict = await inspectGpu(refuses);
+  assert.equal(verdict.usable, false, 'an adapter that cannot make a device was called usable');
+  assert.equal(verdict.reason, 'device-failed');
+  // The driver's own error is searchable; a tidied-up one is not.
+  assert.match(verdict.describe, /DXGI_ERROR_DEVICE_REMOVED/);
+});
+
+test('a working card is accepted, and the probe device is not left open', async () => {
+  const { inspectGpu } = await import('../src/utils/gpu.ts');
+
+  let destroyed = false;
+  const works = {
+    navigator: {
+      gpu: {
+        requestAdapter: async () => ({
+          isFallbackAdapter: false,
+          info: { vendor: 'nvidia', device: 'RTX 4070' },
+          requestDevice: async () => ({ destroy: () => { destroyed = true; } }),
+        }),
+      },
+    },
+  };
+  const verdict = await inspectGpu(works);
+  assert.equal(verdict.usable, true, verdict.describe);
+  assert.equal(verdict.reason, 'ok');
+  // Nothing is drawn with it, and holding it would keep the GPU awake.
+  assert.ok(destroyed, 'the probe device was left open');
+});
+
+test('a software adapter is still refused before any device is asked for', async () => {
+  const { inspectGpu } = await import('../src/utils/gpu.ts');
+
+  const software = {
+    navigator: {
+      gpu: {
+        requestAdapter: async () => ({
+          isFallbackAdapter: false,
+          info: { vendor: 'google', device: 'SwiftShader Device' },
+          requestDevice: async () => ({ destroy: () => {} }),
+        }),
+      },
+    },
+  };
+  const verdict = await inspectGpu(software);
+  assert.equal(verdict.usable, false, 'SwiftShader was taken for a graphics card');
+  assert.equal(verdict.reason, 'software');
 });

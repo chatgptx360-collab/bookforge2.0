@@ -118,7 +118,9 @@ export default function TtsStudioPanel() {
         ? ' Your graphics card is available, so narration runs fast.'
         : gpu.reason === 'software'
           ? ` Your browser reports WebGPU as software only, so this runs${threadNote}. Turning on graphics acceleration, or updating your graphics driver, would fix it.`
-          : ` No graphics acceleration here, so this runs${threadNote}.`;
+          : gpu.reason === 'device-failed'
+            ? ` Your graphics driver offered a card but would not open it for us, so this runs${threadNote}. That usually means the driver is older than the browser expects.`
+            : ` No graphics acceleration here, so this runs${threadNote}.`;
 
   const characters = text.length;
   // Roughly fourteen characters a second at the voice's own pace; speeding it

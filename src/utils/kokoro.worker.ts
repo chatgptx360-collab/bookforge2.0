@@ -61,21 +61,35 @@ function load(id: number): Promise<KokoroModel> {
     threads = self.crossOriginIsolated ? Math.max(1, Math.min(cores - 1, 8)) : 1;
     if (env.backends?.onnx?.wasm) env.backends.onnx.wasm.numThreads = threads;
     else threads = 1;
-    // Only a hardware adapter earns the WebGPU path. A software one would
-    // pull four times the weights and then run them slower than WASM does.
+    // Only a hardware adapter that can actually produce a device earns the
+    // WebGPU path. A software one would pull four times the weights and then
+    // run them slower than WASM does.
     device = (await inspectGpu(self)).usable ? 'webgpu' : 'wasm';
 
-    const loaded = await KokoroTTS.from_pretrained(MODEL_ID, {
-      // WebGPU can afford full precision and sounds better for it; the WASM
-      // fallback takes the quantised build, a quarter of the download.
-      dtype: device === 'webgpu' ? 'fp32' : 'q8',
-      device,
-      progress_callback: (event: { status?: string; progress?: number; file?: string }) => {
-        if (event.status === 'progress' && typeof event.progress === 'number') {
-          post({ id, type: 'progress', fraction: event.progress / 100, file: event.file ?? 'model' });
-        }
-      },
-    } as never);
+    const build = (target: 'webgpu' | 'wasm') =>
+      KokoroTTS.from_pretrained(MODEL_ID, {
+        // WebGPU can afford full precision and sounds better for it; the WASM
+        // fallback takes the quantised build, a quarter of the download.
+        dtype: target === 'webgpu' ? 'fp32' : 'q8',
+        device: target,
+        progress_callback: (event: { status?: string; progress?: number; file?: string }) => {
+          if (event.status === 'progress' && typeof event.progress === 'number') {
+            post({ id, type: 'progress', fraction: event.progress / 100, file: event.file ?? 'model' });
+          }
+        },
+      } as never);
+
+    let loaded;
+    try {
+      loaded = await build(device);
+    } catch (error) {
+      // A GPU can pass every check and still fall over here — the driver only
+      // has to fail once, and a lost device took out a whole run before this
+      // fallback existed. Speaking slowly beats not speaking.
+      if (device !== 'webgpu') throw error;
+      device = 'wasm';
+      loaded = await build('wasm');
+    }
 
     model = loaded as unknown as KokoroModel;
     return model;
