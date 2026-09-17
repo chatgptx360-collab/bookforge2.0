@@ -6,8 +6,9 @@ import ReaderEditorPanel from './components/ReaderEditorPanel';
 import AudiobookPanel from './components/AudiobookPanel';
 import TtsStudioPanel from './components/TtsStudioPanel';
 import AuditPanel from './components/AuditPanel';
+import LineBankPanel from './components/LineBankPanel';
 
-export type ViewId = 'converter' | 'reader' | 'audiobook' | 'speech' | 'check';
+export type ViewId = 'converter' | 'reader' | 'audiobook' | 'speech' | 'check' | 'lines';
 
 /**
  * Audiobook Studio is paused, not deleted.
@@ -31,6 +32,7 @@ const ROUTES: Record<string, ViewId> = {
   ...(AUDIOBOOK_PAUSED ? {} : { '/audiobook': 'audiobook' as ViewId }),
   '/speech': 'speech',
   '/check': 'check',
+  '/lines': 'lines',
 };
 
 function viewFromPath(pathname: string): ViewId {
@@ -105,6 +107,8 @@ export default function App() {
           <TtsStudioPanel />
         ) : activeView === 'check' ? (
           <AuditPanel />
+        ) : activeView === 'lines' ? (
+          <LineBankPanel />
         ) : (
           <ConverterPanel />
         )}

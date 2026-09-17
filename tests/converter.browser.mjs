@@ -280,6 +280,7 @@ test('every view renders under cross-origin isolation', async () => {
       ['/converter', /Convert|File Converter/i],
       ['/reader', /Reader/i],
       ['/check', /Manuscript Check/i],
+      ['/lines', /Line Bank/i],
     ]) {
       await page.goto(`${server.base}${path}`, { waitUntil: 'networkidle' });
       assert.match(await page.locator('body').innerText(), marker, `${path} did not render`);

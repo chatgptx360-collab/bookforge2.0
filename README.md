@@ -19,6 +19,10 @@ structured sections, read it in a typeset reader, and turn it into an audiobook.
   un-skip `tests/audiobook.browser.mjs` with it.
 - **TTS Studio** (`/speech`) — paste any passage, choose a narrator, set the
   pace, and get audio back as WAV or MP3.
+- **Line Bank** (`/lines`) — paste a list or a CSV column, write the lines, and
+  get a ZIP of hundreds of short clips with a manifest mapping every source
+  value to its file. For anything that speaks on demand and cannot wait for a
+  model: a game calling a goal, an app reading a list.
 - **Reader** — a full e-reader, not a scroll view: paginated spreads (two pages on
   wide screens, one on mobile), four themes, four typefaces, size/spacing/margin
   controls, table of contents with per-chapter time estimates, in-book search,
@@ -130,6 +134,34 @@ so an oversized file fails immediately with its own size named instead of
 uploading for a minute and coming back with a bare 413.
 `/api/tts/speak` rejects passages over 4,500 characters with a 413 telling you to
 split them — `/api/tts/plan` does that for you.
+
+## Line Bank
+
+TTS Studio makes one recording at a time, which is the wrong shape for anything
+that speaks on demand. Generating at the moment of the event costs about a
+second per second of audio, so the line arrives after the moment has passed —
+and on a machine without a GPU it competes with whatever else is drawing. The
+answer is to prepare the clips in advance, and that is all this view does.
+
+| Input | What it becomes |
+| --- | --- |
+| A list, one per line | One clip per distinct value |
+| A CSV column | The same, picked from any column in the file |
+| Whole lines | One clip each, spoken as written |
+| Templates containing `{}` | The two halves either side of the slot, so a value can be spoken between them at playback |
+
+Three things make it usable at scale. **Deduplication**: two thousand players
+share a few hundred surnames, and the plan collapses to the distinct ones rather
+than generating identical files for hours. **Last-name mode**, which keeps the
+particle — "van der Sar", not "Sar" — and drops generational suffixes, because
+nobody commentates "Junior". And **overrides**, written `Source = Spoken`, which
+are how a word the phonemiser gets wrong is fixed without touching code: `Nice`
+is read as the English adjective until you write `Nice = Neece`.
+
+The ZIP carries `manifest.json` — the index from source value to clip, the
+template halves, what each clip actually says, anything spoken differently from
+its source, and anything that failed. One value that cannot be spoken is logged
+and skipped rather than ending a run of two thousand.
 
 ## Reader
 

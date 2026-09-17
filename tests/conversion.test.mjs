@@ -1098,3 +1098,73 @@ test('a software adapter is still refused before any device is asked for', async
   assert.equal(verdict.usable, false, 'SwiftShader was taken for a graphics card');
   assert.equal(verdict.reason, 'software');
 });
+
+test('a squad CSV becomes one clip per distinct surname, not one per player', async () => {
+  const { planBank, columnValues } = await import('../src/utils/lineBank.ts');
+
+  const csv = [
+    'id,name,club',
+    '1,Micky van de Ven,Spurs',
+    '2,"Rodríguez, Jr.",Madrid',
+    '3,James Rodríguez,Madrid',
+    '4,Ronaldinho,Barcelona',
+  ].join('\n');
+
+  // A quoted field carrying a comma must not split the row.
+  assert.deepEqual(columnValues(csv, 'name'),
+    ['Micky van de Ven', 'Rodríguez, Jr.', 'James Rodríguez', 'Ronaldinho']);
+
+  const plan = planBank({ entries: columnValues(csv, 'name'), mode: 'surname' });
+
+  // The particle belongs to the surname; a one-word name stays whole.
+  assert.equal(plan.index['Micky van de Ven'], 'van_de_ven');
+  assert.equal(plan.index['Ronaldinho'], 'ronaldinho');
+
+  // Two players, one surname, one clip — the whole point of planning first.
+  assert.equal(plan.index['James Rodríguez'], plan.index['Rodríguez, Jr.']);
+  assert.equal(plan.clips.length, 3, `expected 3 clips, got ${plan.clips.map((c) => c.slug)}`);
+
+  // Accents are folded for the phonemiser but the index keeps the real name.
+  const rodriguez = plan.clips.find((c) => c.slug === 'rodriguez');
+  assert.equal(rodriguez.say, 'Rodriguez');
+  assert.ok('Rodríguez' in plan.overridden);
+});
+
+test('a template becomes the two halves a name is spoken between', async () => {
+  const { planBank, SLOT } = await import('../src/utils/lineBank.ts');
+
+  const plan = planBank({
+    entries: ['Ada Hegerberg'],
+    templates: [`And it is ${SLOT} with the finish!`, `${SLOT} is booked.`],
+    lines: ['That is full time.'],
+    mode: 'surname',
+  });
+
+  const [goal, booked] = plan.templates;
+  assert.equal(goal.preSlug, 'tpl_01_pre');
+  assert.equal(goal.postSlug, 'tpl_01_post');
+  // Nothing precedes the name in the second one, so there is no clip for it.
+  assert.equal(booked.preSlug, null);
+  assert.equal(booked.postSlug, 'tpl_02_post');
+
+  const says = Object.fromEntries(plan.clips.map((c) => [c.slug, c.say]));
+  assert.equal(says['tpl_01_pre'], 'And it is');
+  assert.equal(says['tpl_01_post'], 'with the finish!');
+  assert.equal(says['hegerberg'], 'Hegerberg');
+  assert.match(Object.keys(says).find((s) => s.startsWith('line_001')), /full_time/);
+});
+
+test('an override fixes a word the phonemiser gets wrong', async () => {
+  const { planBank, parseOverrides } = await import('../src/utils/lineBank.ts');
+
+  // "Nice" is read as the English adjective unless it is respelled.
+  const overrides = parseOverrides('Nice = Neece\nSevilla = Seveeya\nnot a rule');
+  assert.deepEqual(overrides, { Nice: 'Neece', Sevilla: 'Seveeya' });
+
+  const plan = planBank({ entries: ['Nice', 'Sevilla', 'Lyon'], overrides });
+  const says = Object.fromEntries(plan.clips.map((c) => [c.display, c.say]));
+  assert.equal(says['Nice'], 'Neece');
+  assert.equal(says['Sevilla'], 'Seveeya');
+  assert.equal(says['Lyon'], 'Lyon', 'an untouched value must not be rewritten');
+  assert.deepEqual(plan.overridden, { Nice: 'Neece', Sevilla: 'Seveeya' });
+});

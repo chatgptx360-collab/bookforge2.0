@@ -25,6 +25,7 @@ Four are reachable; the fifth is paused, not deleted:
   /audiobook   PAUSED. Manuscript -> chapter-by-chapter narration -> WAV/MP3
   /speech      Paste text -> speech
   /check       Finds what publishing platforms reject; fixes the mechanical ones
+  /lines       Hundreds of short clips in one run, as a ZIP with a manifest
 
 Audiobook Studio is hidden by AUDIOBOOK_PAUSED in src/App.tsx, which drops the
 sidebar entry and the route so the view is unreachable and Vite leaves it out
@@ -67,10 +68,11 @@ Deploys to Vercel as one serverless function at /api
   src/utils/docx.ts          Browser-side DOCX unwrapping, so size stops mattering
   src/mammoth-browser.d.ts   Types for mammoth's browser bundle (it ships none)
   src/utils/voiceBlends.ts   Two voices made by mixing Kokoro's style tensors
-  tests/conversion.test.mjs  52 unit tests, node --test, against the built CJS
+  src/utils/lineBank.ts      Plans a bank of clips: CSV, dedup, slugs, templates
+  tests/conversion.test.mjs  55 unit tests, node --test, against the built CJS
   tests/harness.mjs          Shared Playwright harness (server, stubs, fixtures)
   tests/*.browser.mjs        audiobook (5, skipped while paused), check (5),
-                             converter (9)
+                             converter (9), linebank (2)
   tests/kokoro.browser.mjs   Opt-in: the real model, and what it actually says
   tests/run-browser.mjs      Runs the browser suites one file at a time
 
@@ -78,8 +80,8 @@ Scripts:
   npm run dev     tsx server.ts  (Vite in middleware mode; use this)
   npm run build   vite build + esbuild the server
   npm start       serve the built client + API
-  npm test        build:server then node --test  (52 unit tests)
-  npm run test:browser  the Playwright suites, serialised (14 run, 5 skipped
+  npm test        build:server then node --test  (55 unit tests)
+  npm run test:browser  the Playwright suites, serialised (16 run, 5 skipped
                         while Audiobook Studio is paused)
   npm run test:all      both of the above
   npm run test:kokoro   loads the real voice model and checks the audio;
@@ -176,6 +178,20 @@ AUDIOBOOK  (paused — hidden from the UI, code intact; see section 1)
     "Continue narrating" resumes.
   - Per-chapter WAV/MP3 download, or the whole book as a ZIP.
 
+LINE BANK
+  - Built for things that speak on demand and cannot wait for a model: a clip
+    per list entry, a clip per whole line, and templates cut into the halves
+    either side of a {} slot so a value can be spoken between them.
+  - Deduplicates before generating. Two thousand players share a few hundred
+    surnames; without this it is hours of identical files.
+  - Last-name mode keeps particles ("van der Sar") and drops suffixes ("Jr.").
+  - Overrides are written "Source = Spoken" and are how a mispronunciation is
+    fixed without code. See the phonemiser note in section 7.
+  - Uses whichever engine the app is set to. Kokoro is the sane default for
+    bulk, since a hosted engine bills and throttles every clip.
+  - The planning is pure and lives in src/utils/lineBank.ts, so it is tested
+    without a browser or a model; the panel only drives it.
+
 MANUSCRIPT CHECK
   - Rule-based, deterministic, no model. Same input always gives same output —
     it runs on every conversion, so it must not drift.
@@ -201,7 +217,7 @@ MANUSCRIPT CHECK
 -------------------------------------------------------------------------------
 
 VERIFIED
-  - 52 unit tests and 14 browser tests pass (npm run test:all); 5 more are
+  - 55 unit tests and 16 browser tests pass (npm run test:all); 5 more are
     skipped while Audiobook Studio is paused. tsc --noEmit clean. Build clean.
   - THE BLENDED VOICES WORK, measured through the real UI rather than in
     Node: Sadie 243.7 Hz, Cole 142.9 Hz, against targets of 239.7 and 143.2

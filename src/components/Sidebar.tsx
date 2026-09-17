@@ -1,5 +1,12 @@
 import {
-  ShieldCheck, AudioLines, BookOpen, Headphones, RefreshCw, X } from 'lucide-react';
+  AudioLines,
+  BookOpen,
+  Headphones,
+  Package,
+  RefreshCw,
+  ShieldCheck,
+  X,
+} from 'lucide-react';
 import { AUDIOBOOK_PAUSED, type ViewId } from '../App';
 
 interface SidebarProps {
@@ -16,6 +23,7 @@ const NAV_ITEMS: { id: ViewId; label: string; hint: string; icon: typeof BookOpe
   { id: 'audiobook', label: 'Audiobook Studio', hint: 'A book, read chapter by chapter', icon: Headphones },
   { id: 'speech', label: 'TTS Studio', hint: 'Paste text, get audio', icon: AudioLines },
   { id: 'check', label: 'Manuscript Check', hint: 'Find what stores reject', icon: ShieldCheck },
+  { id: 'lines', label: 'Line Bank', hint: 'Many short clips in one run', icon: Package },
 ];
 
 export default function Sidebar({ activeView, setActiveView, isOpen = false, onClose }: SidebarProps) {
