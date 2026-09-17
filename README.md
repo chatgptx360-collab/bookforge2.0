@@ -183,7 +183,8 @@ Both speech views run on Gemini's TTS models through the same three routes, and
 both hand you a finished file rather than a stream you have to capture.
 
 **Two engines.** *Kokoro* is the default: an 82M-parameter Apache-2.0 model that
-runs entirely in the browser through WebGPU, falling back to WASM. Nothing is
+runs entirely in the browser through WebGPU where there is a GPU worth using,
+falling back to WASM. Nothing is
 sent anywhere, there is no key and no quota, and a whole book costs nothing —
 which is the point, since a book is thousands of passages and any hosted API
 bills or throttles every one of them. The model downloads once (~90 MB on
@@ -192,7 +193,21 @@ it. *Gemini* remains available for directed delivery. The choice persists, and
 the picker, previews and downloads work identically either way.
 
 Kokoro takes a voice and a speed and nothing else, so the Delivery box is hidden
-when it is selected rather than left there silently ignoring what you type.
+when it is selected rather than left there silently ignoring what you type. The
+mirror of that is the Pace slider (0.5x-2x), which appears only for Kokoro
+because the hosted engine has no tempo control. It scales the duration the
+model predicts per phoneme, so speech gets quicker without the pitch rising the
+way resampling would raise it, and the "of audio" estimate divides by it rather
+than sitting next to the slider contradicting it.
+
+**Two of the 28 voices are not Kokoro's.** A voice in this model is a 510x256
+block of floats conditioning the decoder, so a weighted sum of two of them is a
+working third voice — and the weights are not confined to [0,1], which matters
+because the whole English catalogue tops out at 212 Hz. Sadie (244 Hz) is
+extrapolated past its strongest ingredient to get there. The library freezes its
+voice catalogue, so each blend takes over an existing id (`am_echo`, `af_river`)
+via a fetch interception in the worker; Echo and River are the two given up for
+them. See `src/utils/voiceBlends.ts`.
 Twenty-eight voices, American and British, gendered in their own ids
 (`af_heart`, `bm_george`) and shown under their names — Heart, Michael, Emma,
 George.
@@ -227,7 +242,19 @@ when `SharedArrayBuffer` is available, which requires the page to be
 cross-origin isolated. The app therefore sends `Cross-Origin-Opener-Policy:
 same-origin` and `Cross-Origin-Embedder-Policy: credentialless`, and the worker
 gives the runtime every core but one. On a machine with no usable GPU that is
-the only speed available, and it is worth several times. `credentialless`
+the only speed available, and it is worth several times.
+
+**"Usable" is decided by building a device, not by asking the adapter.** A
+software adapter (SwiftShader, lavapipe) answers `requestAdapter()` exactly like
+real hardware, and taking it is worse than having no GPU at all: four times the
+download, then run on a CPU rasterizer. But an adapter can also pass every
+inspection — not a fallback, real vendor, real device name — and still fail
+`requestDevice()`, which is what a 2011 card on a 2015 driver does, with
+`DXGI_ERROR_DEVICE_REMOVED`, because D3D12 wants a newer driver model. So
+`inspectGpu()` creates a device and destroys it before reporting WebGPU usable,
+and the worker falls back to WASM if the model fails to load on WebGPU anyway.
+The panel says which path is running and, when the driver refuses, says so in
+the driver's own words. `credentialless`
 rather than `require-corp` because the model comes from the Hugging Face CDN,
 which sends no CORP header. The panel reports the real thread count, so a
 single thread is visible rather than silently assumed.

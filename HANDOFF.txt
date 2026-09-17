@@ -8,8 +8,8 @@ the traps that cost time during the build.
 Repository : github.com/chatgptx360-collab/bookforge2.0
 Branch     : claude/bookforge-web-app-tf85x4   (this IS the default branch;
              there is no main, so no PR was ever opened)
-Head       : d51352e  "Pause Audiobook Studio without deleting it"
-Commits    : 45
+Head       : 0c33e96  "Ignore the generated manuscript-check source dump"
+Commits    : 49
 Deployed   : https://bookforge2-0.vercel.app/
 
 
@@ -67,7 +67,7 @@ Deploys to Vercel as one serverless function at /api
   src/utils/docx.ts          Browser-side DOCX unwrapping, so size stops mattering
   src/mammoth-browser.d.ts   Types for mammoth's browser bundle (it ships none)
   src/utils/voiceBlends.ts   Two voices made by mixing Kokoro's style tensors
-  tests/conversion.test.mjs  49 unit tests, node --test, against the built CJS
+  tests/conversion.test.mjs  52 unit tests, node --test, against the built CJS
   tests/harness.mjs          Shared Playwright harness (server, stubs, fixtures)
   tests/*.browser.mjs        audiobook (5, skipped while paused), check (5),
                              converter (9)
@@ -78,7 +78,7 @@ Scripts:
   npm run dev     tsx server.ts  (Vite in middleware mode; use this)
   npm run build   vite build + esbuild the server
   npm start       serve the built client + API
-  npm test        build:server then node --test  (49 unit tests)
+  npm test        build:server then node --test  (52 unit tests)
   npm run test:browser  the Playwright suites, serialised (14 run, 5 skipped
                         while Audiobook Studio is paused)
   npm run test:all      both of the above
@@ -201,7 +201,7 @@ MANUSCRIPT CHECK
 -------------------------------------------------------------------------------
 
 VERIFIED
-  - 49 unit tests and 14 browser tests pass (npm run test:all); 5 more are
+  - 52 unit tests and 14 browser tests pass (npm run test:all); 5 more are
     skipped while Audiobook Studio is paused. tsc --noEmit clean. Build clean.
   - THE BLENDED VOICES WORK, measured through the real UI rather than in
     Node: Sadie 243.7 Hz, Cole 142.9 Hz, against targets of 239.7 and 143.2
@@ -299,6 +299,18 @@ KNOWN LIMITS, NOT BUGS
     rasterizer. src/utils/gpu.ts interrogates the adapter; do not simplify it
     back to a truthiness check.
 
+  * An adapter is not a device, and asking the adapter about itself is not
+    enough. A 2011 card on a 2015 driver offers an adapter that is not a
+    fallback and carries a real vendor and device name — it passes every check
+    above — then fails requestDevice() with DXGI_ERROR_DEVICE_REMOVED, because
+    D3D12 wants a WDDM 2.0 driver it does not have. A real user was told "your
+    graphics card is available, so narration runs fast" and then had every
+    passage fail. inspectGpu() now builds a device and destroys it, which is
+    the only thing that proves one can be had, and the worker falls back to
+    WASM if the model still fails to load on WebGPU. Do not remove either: the
+    probe is cheap and the fallback is the difference between slow speech and
+    no speech.
+
   * Cross-origin isolation (COOP same-origin + COEP credentialless) is what
     enables SharedArrayBuffer and therefore multi-threaded WASM inference. It
     MUST be credentialless, not require-corp: the model comes from the Hugging
@@ -323,6 +335,13 @@ KNOWN LIMITS, NOT BUGS
 
   * IndexedDB transactions auto-close if you await inside them. Do the get and
     the put in separate transactions.
+
+  * Pronunciation can be checked without listening. The phonemizer package is
+    already a dependency, and calling it directly shows what a name will
+    actually be said as: "Nice" comes out nˈaɪs, the English adjective, and
+    "Dr Congo" comes out dˈɒktə. Checking phonemes catches mispronunciations
+    objectively and in bulk, which matters when generating hundreds of proper
+    nouns. A respelling should be checked the same way before it is trusted.
 
   * Mammoth inlines every image as a base64 data URI unless told otherwise. A
     20 MB illustrated DOCX became 27 MB of HTML — bigger than the file it was
